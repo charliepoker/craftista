@@ -11,7 +11,7 @@ on:
       - 'recommendation/**'
 
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'frontend/**'
       - 'catalogue/**'
@@ -376,6 +376,11 @@ jobs:
     needs: [build-and-push-frontend, build-and-push-catalogue, build-and-push-recommendation, build-and-push-voting]
     if: github.base_ref == 'develop' || github.ref == 'refs/heads/develop'
     steps:
+      - name: Debug GitHub Context
+        run: |
+          echo "Base ref: ${{ github.base_ref }}"
+          echo "Ref: ${{ github.ref }}"
+
       - name: Checkout Kubernetes config repo
         uses: actions/checkout@v4
         with:
