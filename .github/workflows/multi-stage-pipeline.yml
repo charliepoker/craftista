@@ -369,24 +369,18 @@ jobs:
         run: |
           echo "::error::Voting service deployment failed. Status: $([ "${{ steps.docker_push.outputs.PUSH_FAILED }}" == "true" ] && echo "Rollback attempted" || echo "Build failed")"    
 
-#----------------------------------------------------------------------------------------
+
+# _________________________________________________________________________________
 
   deploy-to-staging:
-    runs-on: ubuntu-latest
     needs: [build-and-push-frontend, build-and-push-catalogue, build-and-push-recommendation, build-and-push-voting]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/develop') || github.event_name == 'pull_request'
+    if: github.event.pull_request.merged == true && github.base.ref == 'develop'
+    runs-on: ubuntu-latest
+    environment: 
+      name: staging
     steps:
-      - name: Debug GitHub Context
-        run: |
-          echo "Base ref: ${{ github.base_ref }}"
-          echo "Ref: ${{ github.ref }}"
-
-      - name: Checkout Kubernetes config repo
-        uses: actions/checkout@v4
-        with:
-          repository: craftista-config
-          path: craftista-config/Staging/
-
+      - uses: actions/checkout@v4
+      
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -396,63 +390,47 @@ jobs:
 
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
-
-      - name: Set deployment image versions
-        run: |
-          # Get latest image tags for each service
-          FRONTEND_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-frontend/tags/" | jq -r '.results[0].name')
-          CATALOGUE_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-catalogue/tags/" | jq -r '.results[0].name')
-          RECOMMENDATION_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-recommendation/tags/" | jq -r '.results[0].name')
-          VOTING_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-voting/tags/" | jq -r '.results[0].name')
-          
-          # Update image tags in Kubernetes config files
-          if [ "${{ needs.detect-changes.outputs.frontend }}" == "true" ]; then
-            sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-frontend:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-frontend:$FRONTEND_VERSION|g" craftista-config/Staging/frontend.yaml
-          fi
-          
-          if [ "${{ needs.detect-changes.outputs.catalogue }}" == "true" ]; then
-            sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-catalogue:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-catalogue:$CATALOGUE_VERSION|g" craftista-config/Staging/catalogue.yaml
-          fi
-          
-          if [ "${{ needs.detect-changes.outputs.recommendation }}" == "true" ]; then
-            sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-recommendation:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-recommendation:$RECOMMENDATION_VERSION|g" craftista-config/Staging/recommendation.yaml
-          fi
-          
-          if [ "${{ needs.detect-changes.outputs.voting }}" == "true" ]; then
-            sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-voting:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-voting:$VOTING_VERSION|g" craftista-config/Staging/voting.yaml
-          fi
 
       - name: Deploy to staging
+        id: deploy
         run: |
-          # Apply Kubernetes configurations for staging
-          kubectl apply -f craftista-config/Staging/
+          # Apply namespace
+          kubectl apply -f k8s/staging/namespace.yaml
           
-          # Wait for deployments to be ready
-          kubectl rollout status deployment/frontend -n staging
-          kubectl rollout status deployment/catalogue -n staging
-          kubectl rollout status deployment/recommendation -n staging
-          kubectl rollout status deployment/voting -n staging
-          
-      - name: Commit and push updated staging configs
-        run: |
-          cd craftista-config/Staging/
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add staging/*.yaml
-          git commit -m "Update staging deployment to latest versions [skip ci]" || echo "No changes to commit"
-          git push
+          # Deploy services
+          for service in frontend catalogue recommendation voting; do
+            if [[ -f "k8s/staging/${service}.yaml" ]]; then
+              VERSION_TAG=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-${service}/tags/" | jq -r '.results[0].name')
+              sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-${service}:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-${service}:${VERSION_TAG}|g" k8s/staging/${service}.yaml
+              kubectl apply -f k8s/staging/${service}.yaml
+            fi
+          done
 
-#----------------------------------------------------------------------------------------         
-  deploy-to-production:
+      - name: Verify staging deployment
+        run: |
+          for service in frontend catalogue recommendation voting; do
+            echo "Waiting for ${service} deployment to complete..."
+            kubectl rollout status deployment/${service} -n craftista-staging --timeout=300s
+          done
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: |
+          echo "Deployment failed, rolling back..."
+          for service in frontend catalogue recommendation voting; do
+            if kubectl get deployment ${service} -n craftista-staging &> /dev/null; then
+              kubectl rollout undo deployment/${service} -n craftista-staging
+            fi
+          done
+
+  promote-to-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: 
+      name: production
     steps:
-      - name: Checkout Kubernetes config repo
-        uses: actions/checkout@v4
-        with:
-          repository: craftista-config
-          path: craftista-config/Production/
-
+      - uses: actions/checkout@v4
+      
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -463,31 +441,76 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
 
-      - name: Copy staging configurations to production
+      - name: Validate staging environment
         run: |
-          # Copy all staging configurations to production
-          cp -f craftista-config/Staging/*.yaml craftista-config/production/
-          
-          # Update namespace references from staging to production
-          sed -i 's/namespace: staging/namespace: production/g' craftista-config/production/*.yaml
+          for service in frontend catalogue recommendation voting; do
+            if ! kubectl get deployment ${service} -n craftista-staging &> /dev/null; then
+              echo "Error: ${service} not found in staging"
+              exit 1
+            fi
+            
+            READY=$(kubectl get deployment ${service} -n craftista-staging -o jsonpath='{.status.readyReplicas}')
+            DESIRED=$(kubectl get deployment ${service} -n craftista-staging -o jsonpath='{.spec.replicas}')
+            
+            if [ "$READY" != "$DESIRED" ]; then
+              echo "Error: ${service} not ready in staging"
+              exit 1
+            fi
+          done
 
-      - name: Deploy to production
+      - name: Store current production state
         run: |
-          # Apply Kubernetes configurations for production
-          kubectl apply -f craftista-config/Production/
-          
-          # Wait for deployments to be ready
-          kubectl rollout status deployment/frontend -n production
-          kubectl rollout status deployment/catalogue -n production
-          kubectl rollout status deployment/recommendation -n production
-          kubectl rollout status deployment/voting -n production
-          
-      - name: Commit and push updated production configs
-        run: |
-          cd craftista-config
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add production/*.yaml
-          git commit -m "Update production deployment to latest versions [skip ci]" || echo "No changes to commit"
-          git push
+          mkdir -p /tmp/rollback
+          for service in frontend catalogue recommendation voting; do
+            kubectl get deployment ${service} -n craftista-production -o yaml > /tmp/rollback/${service}.yaml || true
+          done
 
+      - name: Promote to production
+        id: promote
+        run: |
+          # Apply production namespace
+          kubectl apply -f k8s/production/namespace.yaml
+          
+          # For each service, get the image tag from staging and apply to production
+          for service in frontend catalogue recommendation voting; do
+            if [[ -f "k8s/production/${service}.yaml" ]]; then
+              # Get current image tag from staging deployment
+              STAGING_TAG=$(kubectl get deployment ${service} -n craftista-staging -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d ':' -f2)
+              
+              # Update production manifest with staging tag
+              sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-${service}:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_PREFIX }}-${service}:${STAGING_TAG}|g" k8s/production/${service}.yaml
+              
+              # Apply to production
+              kubectl apply -f k8s/production/${service}.yaml
+            fi
+          done
+
+      - name: Verify production deployment
+        run: |
+          for service in frontend catalogue recommendation voting; do
+            echo "Waiting for ${service} deployment to complete..."
+            kubectl rollout status deployment/${service} -n craftista-production --timeout=300s
+          done
+
+      - name: Rollback on failure
+        if: failure() && steps.promote.outcome == 'failure'
+        run: |
+          echo "Promotion failed, rolling back..."
+          for service in frontend catalogue recommendation voting; do
+            if [ -f "/tmp/rollback/${service}.yaml" ]; then
+              kubectl apply -f /tmp/rollback/${service}.yaml
+            fi
+          done
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ENVIRONMENT="${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}"
+          
+          if [ "$STATUS" = "success" ]; then
+            echo "Deployment to ${ENVIRONMENT} completed successfully"
+          else
+            echo "Deployment to ${ENVIRONMENT} failed"
+            exit 1
+          fi
