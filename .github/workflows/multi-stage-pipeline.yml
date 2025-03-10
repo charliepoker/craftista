@@ -10,13 +10,13 @@ on:
       - 'voting/**'
       - 'recommendation/**'
 
-  push:
-    branches: [develop]
-    paths:
-      - 'frontend/**'
-      - 'catalogue/**'
-      - 'voting/**'
-      - 'recommendation/**'
+  # push:
+  #   branches: [develop]
+  #   paths:
+  #     - 'frontend/**'
+  #     - 'catalogue/**'
+  #     - 'voting/**'
+  #     - 'recommendation/**'
 
 env:
   REGISTRY: docker.io
@@ -374,7 +374,7 @@ jobs:
 
   deploy-to-staging:
     needs: [build-and-push-frontend, build-and-push-catalogue, build-and-push-recommendation, build-and-push-voting]
-    if: github.event.pull_request.merged == true && github.base.ref == 'develop'
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop'
     runs-on: ubuntu-latest
     environment: 
       name: staging
