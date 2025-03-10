@@ -375,14 +375,21 @@ jobs:
   deploy-to-staging:
     needs: [build-and-push-frontend, build-and-push-catalogue, build-and-push-recommendation, build-and-push-voting]
     if: |
-      github.event_name == 'pull_request' && 
       github.event.pull_request.merged == true && 
-      github.base_ref == 'develop'
+      github.event.pull_request.base.ref == 'develop'
     runs-on: ubuntu-latest
     environment: 
       name: staging
     steps:
       - uses: actions/checkout@v4
+
+      - name: Debug GitHub context
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "Merged: ${{ github.event.pull_request.merged }}"
+          echo "Base ref: ${{ github.event.pull_request.base.ref }}"
+          echo "Full GitHub context:"
+          echo '${{ toJson(github) }}'
       
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
