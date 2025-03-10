@@ -11,7 +11,7 @@ on:
       - 'recommendation/**'
 
   push:
-    branches: [main]
+    branches: [develop]
     paths:
       - 'frontend/**'
       - 'catalogue/**'
