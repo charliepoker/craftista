@@ -18,6 +18,10 @@ on:
       - 'voting/**'
       - 'recommendation/**'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: docker.io
   IMAGE_PREFIX: craftista
