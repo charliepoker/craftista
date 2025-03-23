@@ -394,12 +394,13 @@ jobs:
       - name: Install CIVO CLI
         run: |
           curl -sL https://civo.com/get | sh
-          civo apikey add github-action ${{ secrets.CIVO_API_KEY }}
+          civo apikey add default ${{ secrets.CIVO_API_KEY }}
 
       - name: Check existing cluster
         id: check_cluster
+        continue-on-error: true
         run: |
-          if civo kubernetes show ${{ env.CLUSTER_NAME }} 2>/dev/null; then
+          if civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}; then
             echo "EXISTS=true" >> $GITHUB_OUTPUT
           else
             echo "EXISTS=false" >> $GITHUB_OUTPUT
@@ -410,118 +411,51 @@ jobs:
         run: |
           echo "Deleting existing cluster..."
           civo kubernetes remove ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --yes
+          sleep 30
 
-            - name: Create Kubernetes cluster
+      - name: Create Kubernetes cluster
         id: create_cluster
         run: |
           echo "Creating new cluster..."
-          # Add retries for cluster creation
-          max_retries=3
-          retry_count=0
-          
-          while [ $retry_count -lt $max_retries ]; do
-            if civo kubernetes create ${{ env.CLUSTER_NAME }} \
-              --nodes=3 \
-              --size=g4s.kube.medium \
-              --region ${{ env.CIVO_REGION }} \
-              --save \
-              --wait; then
-              echo "CLUSTER_CREATED=true" >> $GITHUB_OUTPUT
-              break
-            else
-              let retry_count++
-              echo "Cluster creation failed, attempt $retry_count of $max_retries"
-              # Delete failed cluster if it exists
-              civo kubernetes remove ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --yes || true
-              sleep 30
-            fi
-          done
-          
-          if [ $retry_count -eq $max_retries ]; then
-            echo "Failed to create cluster after $max_retries attempts"
-            exit 1
-          fi
+          civo kubernetes create ${{ env.CLUSTER_NAME }} \
+            --nodes=3 \
+            --size=g4s.kube.medium \
+            --region ${{ env.CIVO_REGION }} \
+            --save \
+            --merge \
+            --wait
 
-      - name: Wait for cluster
-        if: steps.create_cluster.outputs.CLUSTER_CREATED == 'true'
+      - name: Wait for cluster readiness
         run: |
           echo "Waiting for cluster to be ready..."
-          max_attempts=30
           attempt=0
-          
-          while [ $attempt -lt $max_attempts ]; do
-            if civo kubernetes show ${{ env.CLUSTER_NAME }} | grep -q "READY"; then
-              echo "Cluster is ready!"
-              break
-            fi
-            
-            let attempt++
-            echo "Attempt $attempt of $max_attempts: Cluster not ready yet..."
-            
-            # Check for specific error conditions
-            if civo kubernetes show ${{ env.CLUSTER_NAME }} | grep -q "Error"; then
-              echo "Error detected in cluster status"
-              civo kubernetes show ${{ env.CLUSTER_NAME }}
-              exit 1
-            fi
-            
-            sleep 20
+          max_attempts=20
+          until civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep -q "READY" || [ $attempt -eq $max_attempts ]; do
+            attempt=$((attempt+1))
+            echo "Attempt $attempt of $max_attempts: Waiting for cluster..."
+            sleep 30
           done
-          
+
           if [ $attempt -eq $max_attempts ]; then
             echo "Cluster failed to become ready within timeout"
-            civo kubernetes show ${{ env.CLUSTER_NAME }}
             exit 1
           fi
 
-      - name: Verify CIVO API access
+      - name: Configure kubectl
         run: |
-          echo "Verifying CIVO API access..."
-          if ! civo quota; then
-            echo "Error: Cannot access CIVO API"
-            exit 1
-          fi
+          civo kubernetes config ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --save --merge
+          kubectl config use-context ${{ env.CLUSTER_NAME }}
           
-          echo "Verifying cluster access..."
-          if ! civo kubernetes ls; then
-            echo "Error: Cannot list kubernetes clusters"
-            exit 1
-          fi
-
-      - name: Setup kubectl with retry
-        run: |
-          max_retries=3
-          retry_count=0
-          
-          while [ $retry_count -lt $max_retries ]; do
-            if civo kubernetes config ${{ env.CLUSTER_NAME }} --save; then
-              echo "Successfully configured kubectl"
-              break
-            else
-              let retry_count++
-              echo "Failed to configure kubectl, attempt $retry_count of $max_retries"
-              sleep 10
-            fi
-          done
-          
-          if [ $retry_count -eq $max_retries ]; then
-            echo "Failed to configure kubectl after $max_retries attempts"
-            exit 1
-          fi
-          
-          # Verify kubectl access
-          kubectl cluster-info
-          kubectl get nodes
+          # Wait for nodes to be ready
+          echo "Waiting for nodes to be ready..."
+          kubectl wait --for=condition=ready node --all --timeout=300s
 
       - name: Apply Kubernetes manifests
         run: |
-          # Apply all manifests in order
-          kubectl apply -f k8s/frontend-deployment.yaml
-          kubectl apply -f k8s/catalogue-deployment.yaml
-          kubectl apply -f k8s/recco-deployment.yaml
-          kubectl apply -f k8s/voting-deployment.yaml
+          # Apply base infrastructure first
+          kubectl apply -f k8s/
 
-      - name: Update deployments with latest images
+      - name: Update deployments
         run: |
           if [[ "${{ needs.detect-changes.outputs.frontend }}" == "true" ]]; then
             echo "Updating frontend deployment..."
@@ -553,29 +487,36 @@ jobs:
           kubectl get pods -A
           kubectl get deployments
           kubectl get services
-          
-          # Check for any pods in error state
+
+      - name: Check for pod errors
+        run: |
           if kubectl get pods -A | grep -E "Error|CrashLoopBackOff"; then
-            echo "::error::Some pods are in error state"
+            echo "Some pods are in error state"
             kubectl describe pods
             exit 1
           fi
 
+      - name: Deployment Status
+        if: always()
+        run: |
+          echo "Final Deployment Status:"
+          kubectl get pods -A
+          kubectl get deployments
+          kubectl get services
+          
       - name: Cleanup on failure
         if: failure()
         run: |
           echo "Deployment failed, collecting logs..."
           kubectl get events
           kubectl describe pods
-          echo "Consider running: civo kubernetes delete ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --yes"
+          civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}
 
       - name: Notify status
         if: always()
         run: |
           if [[ "${{ job.status }}" == "success" ]]; then
             echo "::notice::Deployment completed successfully"
-            echo "Cluster Info:"
-            civo kubernetes show ${{ env.CLUSTER_NAME }}
           else
             echo "::error::Deployment failed. Check the logs for details."
           fi
