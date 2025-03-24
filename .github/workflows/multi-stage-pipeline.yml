@@ -409,46 +409,43 @@ jobs:
             sleep 60
           fi
 
-      - name: Create Kubernetes cluster
+            - name: Create Kubernetes cluster
         id: create_cluster
         run: |
           echo "Creating new cluster..."
-          # Create firewall first
-          FIREWALL_ID=$(civo firewall create craftista-firewall \
-            --region ${{ env.CIVO_REGION }} \
-            --create-rules "kubernetes-api-access,tcp,6443,0.0.0.0/0" \
-            -o custom -f "Id" || echo "")
-
-          # Create cluster with retries
-          max_retries=3
-          attempt=0
+          # Generate a unique firewall name using timestamp
+          FIREWALL_NAME="craftista-fw-$(date +%s)"
           
-          while [ $attempt -lt $max_retries ]; do
-            if civo kubernetes create ${{ env.CLUSTER_NAME }} \
-              --nodes=3 \
-              --size=g4s.kube.medium \
-              --region ${{ env.CIVO_REGION }} \
-              --firewall-id $FIREWALL_ID \
-              --applications=none \
-              --remove-applications \
-              --network-id default \
-              --api-access=public \
-              --wait; then
-              
-              echo "CLUSTER_CREATED=true" >> $GITHUB_OUTPUT
-              break
-            else
-              let attempt++
-              echo "Attempt $attempt of $max_retries: Cluster creation failed, retrying..."
-              # Clean up failed attempt
-              civo kubernetes remove ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --yes || true
-              sleep 30
-            fi
-          done
+          echo "Creating firewall $FIREWALL_NAME..."
+          FIREWALL_ID=$(civo firewall create $FIREWALL_NAME \
+            --region ${{ env.CIVO_REGION }} \
+            --create-rule "tcp:6443:0.0.0.0/0" \
+            --create-rule "tcp:80:0.0.0.0/0" \
+            --create-rule "tcp:443:0.0.0.0/0" || echo "")
 
-          if [ $attempt -eq $max_retries ]; then
-            echo "Failed to create cluster after $max_retries attempts"
-            exit 1
+          echo "Waiting for firewall creation..."
+          sleep 10
+
+          echo "Creating cluster..."
+          civo kubernetes create ${{ env.CLUSTER_NAME }} \
+            --nodes=3 \
+            --size=g4s.kube.medium \
+            --region ${{ env.CIVO_REGION }} \
+            --network-id default \
+            --applications=none \
+            --remove-applications \
+            --wait \
+            --yes
+
+          echo "Waiting for initial cluster creation..."
+          sleep 45
+
+          # Verify cluster status
+          if civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep -q "ACTIVE"; then
+            echo "Cluster created successfully"
+          else
+            echo "Cluster creation may have failed, checking status..."
+            civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}
           fi
 
       - name: Wait for cluster readiness
@@ -458,8 +455,7 @@ jobs:
           attempt=0
           
           while [ $attempt -lt $max_attempts ]; do
-            status=$(civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep "Status" || echo "")
-            if [[ $status == *"ACTIVE"* ]]; then
+            if civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep -q "ACTIVE"; then
               echo "Cluster is ready!"
               break
             fi
@@ -481,29 +477,17 @@ jobs:
           civo kubernetes config ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} --save
           chmod 600 ~/.kube/config
           
+          # Test configuration
+          if kubectl cluster-info; then
+            echo "kubectl configured successfully"
+          else
+            echo "Failed to configure kubectl"
+            exit 1
+          fi
+
           # Wait for nodes
           echo "Waiting for nodes..."
-          timeout=300
-          start_time=$(date +%s)
-          
-          while true; do
-            current_time=$(date +%s)
-            elapsed=$((current_time - start_time))
-            
-            if [ $elapsed -gt $timeout ]; then
-              echo "Timeout waiting for nodes"
-              exit 1
-            fi
-            
-            if kubectl get nodes | grep -q "Ready"; then
-              echo "Nodes are ready!"
-              break
-            fi
-            
-            echo "Waiting for nodes to be ready..."
-            sleep 10
-          done
-          
+          kubectl wait --for=condition=ready nodes --all --timeout=300s || true
           kubectl get nodes
 
       - name: Apply Kubernetes manifests
