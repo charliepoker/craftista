@@ -413,27 +413,12 @@ jobs:
         id: create_cluster
         run: |
           echo "Creating new cluster..."
-          # Generate a unique firewall name using timestamp
-          FIREWALL_NAME="craftista-fw-$(date +%s)"
-          
-          echo "Creating firewall $FIREWALL_NAME..."
-          FIREWALL_ID=$(civo firewall create $FIREWALL_NAME \
-            --region ${{ env.CIVO_REGION }} \
-            --create-rule "tcp:6443:0.0.0.0/0" \
-            --create-rule "tcp:80:0.0.0.0/0" \
-            --create-rule "tcp:443:0.0.0.0/0" || echo "")
-
-          echo "Waiting for firewall creation..."
-          sleep 10
-
-          echo "Creating cluster..."
+          # Create cluster with minimal configuration
           civo kubernetes create ${{ env.CLUSTER_NAME }} \
             --nodes=3 \
             --size=g4s.kube.medium \
             --region ${{ env.CIVO_REGION }} \
-            --network-id default \
             --applications=none \
-            --remove-applications \
             --wait \
             --yes
 
@@ -448,26 +433,34 @@ jobs:
             civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}
           fi
 
-      - name: Wait for cluster readiness
+      - name: Configure firewall rules
+        if: success()
         run: |
-          echo "Waiting for cluster to be ready..."
-          max_attempts=20
-          attempt=0
+          # Get the firewall ID from the cluster
+          FIREWALL_ID=$(civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep "Firewall" | awk '{print $2}')
           
-          while [ $attempt -lt $max_attempts ]; do
-            if civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep -q "ACTIVE"; then
-              echo "Cluster is ready!"
-              break
-            fi
-            
-            let attempt++
-            echo "Attempt $attempt of $max_attempts: Waiting for cluster..."
-            sleep 30
-          done
+          if [ ! -z "$FIREWALL_ID" ]; then
+            echo "Configuring firewall rules..."
+            civo firewall rule create $FIREWALL_ID \
+              --protocol tcp \
+              --start-port 80 \
+              --end-port 80 \
+              --cidr 0.0.0.0/0 \
+              --label "HTTP" || true
 
-          if [ $attempt -eq $max_attempts ]; then
-            echo "Cluster failed to become ready within timeout"
-            exit 1
+            civo firewall rule create $FIREWALL_ID \
+              --protocol tcp \
+              --start-port 443 \
+              --end-port 443 \
+              --cidr 0.0.0.0/0 \
+              --label "HTTPS" || true
+
+            civo firewall rule create $FIREWALL_ID \
+              --protocol tcp \
+              --start-port 6443 \
+              --end-port 6443 \
+              --cidr 0.0.0.0/0 \
+              --label "Kubernetes API" || true
           fi
 
       - name: Configure kubectl
