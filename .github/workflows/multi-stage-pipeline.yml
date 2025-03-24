@@ -409,7 +409,7 @@ jobs:
             sleep 60
           fi
 
-            - name: Create Kubernetes cluster
+      - name: Create Kubernetes cluster
         id: create_cluster
         run: |
           echo "Creating new cluster..."
