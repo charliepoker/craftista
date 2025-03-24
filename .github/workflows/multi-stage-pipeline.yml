@@ -380,7 +380,7 @@ jobs:
 
   deploy-to-civo:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     needs: [detect-changes, build-and-push-frontend, build-and-push-catalogue, build-and-push-recommendation, build-and-push-voting]
     if: always()
     
