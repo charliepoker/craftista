@@ -413,24 +413,23 @@ jobs:
         id: create_cluster
         run: |
           echo "Creating new cluster..."
-          # Create cluster with minimal configuration
           civo kubernetes create ${{ env.CLUSTER_NAME }} \
             --nodes=3 \
             --size=g4s.kube.medium \
             --region ${{ env.CIVO_REGION }} \
-            --applications=none \
             --wait \
             --yes
 
           echo "Waiting for initial cluster creation..."
-          sleep 45
+          sleep 45 # Consider increasing this if cluster creation is slow
 
-          # Verify cluster status
-          if civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | grep -q "ACTIVE"; then
+          # Verify cluster status (improved)
+          civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}
+          if [[ $(civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }} | jq -r '.status') == "ACTIVE" ]]; then
             echo "Cluster created successfully"
           else
-            echo "Cluster creation may have failed, checking status..."
-            civo kubernetes show ${{ env.CLUSTER_NAME }} --region ${{ env.CIVO_REGION }}
+            echo "::error::Cluster creation failed. Check Civo dashboard for details."
+            exit 1
           fi
 
       - name: Configure firewall rules
