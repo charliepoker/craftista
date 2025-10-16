@@ -11,6 +11,9 @@
   "scripts": {
     "start": "node app.js",
     "test": "mocha test/*.js",
+    "test:unit": "mocha test/appTest.js",
+    "test:integration": "mocha test/integration/*.js",
+    "test:performance": "mocha test/performance/*.js --timeout 60000",
     "test:coverage": "nyc --reporter=lcov --reporter=text --report-dir=./coverage mocha 'test/**/*.js'",
     "lint": "eslint ."
   },

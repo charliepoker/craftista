@@ -1,0 +1,82 @@
+[
+  {
+    "name": "Origami Crane",
+    "description": "Beautiful paper crane perfect for beginners",
+    "price": 15.99,
+    "category": "origami",
+    "tags": ["paper", "craft", "bird", "beginner"],
+    "attributes": {
+      "difficulty": "beginner",
+      "color": "red",
+      "material": "paper",
+      "size": "medium"
+    },
+    "featured": true,
+    "inventory_count": 50,
+    "active": true
+  },
+  {
+    "name": "Dragon Origami Kit",
+    "description": "Advanced dragon origami with detailed instructions",
+    "price": 29.99,
+    "category": "origami",
+    "tags": ["paper", "craft", "dragon", "advanced"],
+    "attributes": {
+      "difficulty": "advanced",
+      "color": "green",
+      "material": "premium_paper",
+      "size": "large"
+    },
+    "featured": true,
+    "inventory_count": 25,
+    "active": true
+  },
+  {
+    "name": "Butterfly Collection",
+    "description": "Set of 5 different butterfly designs",
+    "price": 22.5,
+    "category": "origami",
+    "tags": ["paper", "craft", "butterfly", "collection"],
+    "attributes": {
+      "difficulty": "intermediate",
+      "color": "multicolor",
+      "material": "colored_paper",
+      "size": "medium"
+    },
+    "featured": false,
+    "inventory_count": 35,
+    "active": true
+  },
+  {
+    "name": "Simple Flower",
+    "description": "Easy flower design for children",
+    "price": 8.99,
+    "category": "origami",
+    "tags": ["paper", "craft", "flower", "kids"],
+    "attributes": {
+      "difficulty": "beginner",
+      "color": "yellow",
+      "material": "paper",
+      "size": "small"
+    },
+    "featured": false,
+    "inventory_count": 100,
+    "active": true
+  },
+  {
+    "name": "Elephant Origami",
+    "description": "Cute elephant design with trunk movement",
+    "price": 18.75,
+    "category": "origami",
+    "tags": ["paper", "craft", "elephant", "animal"],
+    "attributes": {
+      "difficulty": "intermediate",
+      "color": "gray",
+      "material": "paper",
+      "size": "medium"
+    },
+    "featured": false,
+    "inventory_count": 40,
+    "active": true
+  }
+]

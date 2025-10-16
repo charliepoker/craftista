@@ -1,0 +1,200 @@
+# Performance Benchmarks Configuration for Database Operations
+# Defines performance expectations and test scenarios
+
+benchmarks:
+  database_connections:
+    connection_establishment:
+      description: "Time to establish database connection"
+      target_percentile_95: 1000 # milliseconds
+      target_percentile_99: 2000 # milliseconds
+      max_acceptable: 5000 # milliseconds
+
+    connection_pool_acquisition:
+      description: "Time to acquire connection from pool"
+      target_percentile_95: 100 # milliseconds
+      target_percentile_99: 500 # milliseconds
+      max_acceptable: 1000 # milliseconds
+
+    connection_pool_exhaustion:
+      description: "Behavior when connection pool is exhausted"
+      max_wait_time: 5000 # milliseconds
+      queue_timeout: 10000 # milliseconds
+
+  query_performance:
+    catalogue_service:
+      simple_product_query:
+        description: "Single product retrieval by ID"
+        target_time: 50 # milliseconds
+        max_acceptable: 200 # milliseconds
+
+      product_search:
+        description: "Text search across products"
+        target_time: 200 # milliseconds
+        max_acceptable: 1000 # milliseconds
+
+      product_listing:
+        description: "Paginated product listing"
+        target_time: 100 # milliseconds
+        max_acceptable: 500 # milliseconds
+        page_size: 20
+
+      bulk_operations:
+        description: "Bulk product operations"
+        insert_batch_size: 100
+        target_time_per_item: 10 # milliseconds
+        max_time_per_item: 50 # milliseconds
+
+    voting_service:
+      vote_recording:
+        description: "Recording a single vote"
+        target_time: 50 # milliseconds
+        max_acceptable: 200 # milliseconds
+
+      vote_counting:
+        description: "Counting votes for an origami"
+        target_time: 30 # milliseconds
+        max_acceptable: 100 # milliseconds
+
+      leaderboard_query:
+        description: "Top origami by votes"
+        target_time: 100 # milliseconds
+        max_acceptable: 500 # milliseconds
+
+      data_synchronization:
+        description: "Sync data from catalogue service"
+        target_time_per_item: 20 # milliseconds
+        max_time_per_item: 100 # milliseconds
+        batch_size: 50
+
+    recommendation_service:
+      cache_read:
+        description: "Reading from Redis cache"
+        target_time: 10 # milliseconds
+        max_acceptable: 50 # milliseconds
+
+      cache_write:
+        description: "Writing to Redis cache"
+        target_time: 20 # milliseconds
+        max_acceptable: 100 # milliseconds
+
+      cache_invalidation:
+        description: "Cache invalidation operations"
+        target_time: 30 # milliseconds
+        max_acceptable: 150 # milliseconds
+
+      recommendation_generation:
+        description: "Generate recommendations for user"
+        target_time: 500 # milliseconds
+        max_acceptable: 2000 # milliseconds
+
+  concurrent_operations:
+    load_scenarios:
+      light_load:
+        concurrent_users: 10
+        operations_per_second: 50
+        duration_seconds: 60
+
+      medium_load:
+        concurrent_users: 50
+        operations_per_second: 200
+        duration_seconds: 300
+
+      heavy_load:
+        concurrent_users: 100
+        operations_per_second: 500
+        duration_seconds: 600
+
+    performance_targets:
+      response_time_percentiles:
+        p50: 100 # milliseconds
+        p95: 500 # milliseconds
+        p99: 1000 # milliseconds
+
+      throughput:
+        min_operations_per_second: 100
+        target_operations_per_second: 500
+
+      error_rates:
+        max_error_rate_percent: 1.0
+        max_timeout_rate_percent: 0.5
+
+  memory_usage:
+    connection_pools:
+      max_memory_per_connection_mb: 10
+      max_total_pool_memory_mb: 500
+
+    query_execution:
+      max_memory_per_query_mb: 50
+      max_concurrent_query_memory_mb: 500
+
+    caching:
+      max_cache_memory_mb: 1000
+      cache_hit_ratio_target: 0.85
+
+  reliability_benchmarks:
+    circuit_breaker:
+      failure_threshold: 5
+      timeout_duration_ms: 10000
+      recovery_timeout_ms: 30000
+      success_threshold: 3
+
+    retry_mechanisms:
+      max_retries: 3
+      initial_delay_ms: 1000
+      max_delay_ms: 10000
+      backoff_multiplier: 2.0
+
+    health_checks:
+      health_check_interval_ms: 30000
+      health_check_timeout_ms: 5000
+      unhealthy_threshold: 3
+      healthy_threshold: 2
+
+# Test execution configuration
+test_execution:
+  warmup:
+    duration_seconds: 30
+    operations_count: 100
+
+  measurement:
+    duration_seconds: 300
+    sample_interval_ms: 1000
+
+  cooldown:
+    duration_seconds: 10
+
+# Reporting configuration
+reporting:
+  metrics:
+    - "response_time_percentiles"
+    - "throughput"
+    - "error_rates"
+    - "memory_usage"
+    - "connection_pool_stats"
+
+  output_formats:
+    - "json"
+    - "csv"
+    - "html"
+
+  alerts:
+    performance_degradation_threshold: 20 # percent
+    memory_usage_threshold: 80 # percent
+    error_rate_threshold: 5 # percent
+
+# Environment-specific configurations
+environments:
+  ci:
+    # Reduced targets for CI environment
+    scale_factor: 0.5
+    max_duration_seconds: 120
+
+  staging:
+    # Production-like performance targets
+    scale_factor: 0.8
+
+  production:
+    # Full performance requirements
+    scale_factor: 1.0
+    monitoring_enabled: true
+    alerting_enabled: true

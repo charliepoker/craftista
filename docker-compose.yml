@@ -1,65 +1,198 @@
+version: "3.8"
 
 networks:
   craftista-network:
     driver: bridge
 
 services:
+  # Database Services
+  mongodb:
+    image: mongo:7-jammy
+    container_name: craftista-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin123}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-catalogue}
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker-init/mongodb:/docker-entrypoint-initdb.d
+    networks:
+      - craftista-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: craftista-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-voting}
+      POSTGRES_USER: ${POSTGRES_USER:-voting_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voting_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker-init/postgres:/docker-entrypoint-initdb.d
+    networks:
+      - craftista-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-voting_user} -d ${POSTGRES_DB:-voting}",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: craftista-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - craftista-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Application Services
   frontend:
     build: ./frontend
     image: craftista-frontend:${FRONTEND_VERSION:-v1}
+    container_name: craftista-frontend
     ports:
       - "3000:3000"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - PRODUCTS_API_BASE_URI=http://catalogue:5000
       - RECOMMENDATION_BASE_URI=http://recco:8080
-      - VOTING_BASE_URI=http://voting:8080
+      - VOTING_BASE_URI=http://craftista-voting:8080
     depends_on:
-      - catalogue
-      - recco
-      - voting
+      catalogue:
+        condition: service_healthy
+      recco:
+        condition: service_healthy
+      voting:
+        condition: service_healthy
     networks:
       - craftista-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   catalogue:
     build: ./catalogue
     image: craftista-catalogue:${CATALOGUE_VERSION:-v1}
+    container_name: craftista-catalogue
     ports:
       - "5000:5000"
     environment:
-      - FLASK_ENV=production
-      - MONGO_URI=mongodb://catalogue-db:27017/craftista
-    # depends_on:
-    #   - catalogue-db
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATA_SOURCE=${DATA_SOURCE:-mongodb}
+      - MONGODB_URL=mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD:-admin123}@mongodb:27017/${MONGODB_DATABASE:-catalogue}?authSource=admin
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-catalogue}
+      - MONGODB_MAX_POOL_SIZE=${MONGODB_MAX_POOL_SIZE:-10}
+      - MONGODB_MIN_POOL_SIZE=${MONGODB_MIN_POOL_SIZE:-2}
+      - MONGODB_CONNECTION_TIMEOUT_MS=${MONGODB_CONNECTION_TIMEOUT_MS:-20000}
+      - MONGODB_RETRY_ATTEMPTS=${MONGODB_RETRY_ATTEMPTS:-3}
+      - HEALTH_CHECK_ENABLED=${HEALTH_CHECK_ENABLED:-true}
+      - LOG_LEVEL=${CATALOGUE_LOG_LEVEL:-INFO}
+    depends_on:
+      mongodb:
+        condition: service_healthy
     networks:
       - craftista-network
-
-  # catalogue-db:
-  #   image: mongo:${MONGO_VERSION:-latest}
-  #   ports:
-  #     - "27017"
-  #   volumes:
-  #     - catalogue-db-data:/data/db
-  #   networks:
-  #     - craftista-network
-  #   restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/products"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   voting:
     build: ./voting
     image: craftista-voting:${VOTING_VERSION:-v1}
+    container_name: craftista-voting
     ports:
       - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-production}
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-voting}
+      - DATABASE_USERNAME=${POSTGRES_USER:-voting_user}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-voting_pass}
+      - DATABASE_MAX_CONNECTIONS=${DATABASE_MAX_CONNECTIONS:-10}
+      - DATABASE_CONNECTION_TIMEOUT=${DATABASE_CONNECTION_TIMEOUT:-20000}
+      - DATABASE_RETRY_ATTEMPTS=${DATABASE_RETRY_ATTEMPTS:-3}
+      - CATALOGUE_SERVICE_URL=http://catalogue:5000/api/products
+      - LOG_LEVEL=${VOTING_LOG_LEVEL:-INFO}
+      - FLYWAY_ENABLED=${FLYWAY_ENABLED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      catalogue:
+        condition: service_healthy
     networks:
       - craftista-network
-
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
   recco:
     build: ./recommendation
     image: craftista-recco:${RECCO_VERSION:-v1}
+    container_name: craftista-recommendation
     ports:
       - "8081:8080"
+    environment:
+      - GIN_MODE=${GIN_MODE:-release}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DATABASE=${REDIS_DATABASE:-0}
+      - REDIS_MAX_RETRIES=${REDIS_MAX_RETRIES:-3}
+      - REDIS_POOL_SIZE=${REDIS_POOL_SIZE:-10}
+      - REDIS_MIN_IDLE_CONNS=${REDIS_MIN_IDLE_CONNS:-2}
+      - CACHE_DEFAULT_TTL=${CACHE_DEFAULT_TTL:-1h}
+      - LOG_LEVEL=${RECOMMENDATION_LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - craftista-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
+  mongodb_data:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
   catalogue-db-data:

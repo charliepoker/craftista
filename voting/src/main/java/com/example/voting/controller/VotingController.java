@@ -29,13 +29,13 @@ public class VotingController {
     }
 
     @GetMapping("/{origamiId}")
-    public Origami getOrigami(@PathVariable Long origamiId) {
-        return origamiRepository.findById(origamiId)
+    public Origami getOrigami(@PathVariable String origamiId) {
+        return origamiRepository.findByOrigamiId(origamiId)
             .orElseThrow(() -> new RuntimeException("Origami Not Found"));
     }
 
     @GetMapping("/{origamiId}/votes")
-    public ResponseEntity<Integer> getVotes(@PathVariable Long origamiId) {
+    public ResponseEntity<Integer> getVotes(@PathVariable String origamiId) {
         try {
             int votes = origamiService.getVotes(origamiId);
             return ResponseEntity.ok(votes);
@@ -51,10 +51,10 @@ public class VotingController {
     }
 
     @PostMapping("/{origamiId}/vote")
-    public Origami voteForOrigami(@PathVariable Long origamiId) {
-        Origami origami = origamiRepository.findById(origamiId)
+    public Origami voteForOrigami(@PathVariable String origamiId) {
+        Origami origami = origamiRepository.findByOrigamiId(origamiId)
             .orElseThrow(() -> new RuntimeException("Origami Not Found"));
-        origami.setVotes(origami.getVotes() + 1);
+        origami.setVoteCount(origami.getVoteCount() + 1);
         return origamiRepository.save(origami);
     }
 }

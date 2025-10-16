@@ -1,0 +1,241 @@
+# Comprehensive Testing Framework Configuration
+# This configuration file defines settings for all test types across all services
+
+# Global test settings
+global:
+  timeout: 30000 # Default timeout in milliseconds
+  retries: 3 # Number of retries for flaky tests
+  parallel: true # Run tests in parallel when possible
+
+# Service-specific configurations
+services:
+  catalogue:
+    name: "Catalogue Service (Python/Flask)"
+    path: "./catalogue"
+    database: "mongodb"
+    test_types:
+      unit:
+        enabled: true
+        path: "tests/"
+        pattern: "test_*.py"
+        command: "python -m pytest tests/ -v --cov=repository --cov=models --cov-report=html --cov-report=term"
+        markers:
+          - "unit"
+        timeout: 10000
+      integration:
+        enabled: true
+        path: "tests/integration/"
+        pattern: "test_*_integration.py"
+        command: "python -m pytest tests/integration/ -v -m integration"
+        markers:
+          - "integration"
+        timeout: 60000
+        requires_docker: true
+      performance:
+        enabled: true
+        path: "tests/performance/"
+        pattern: "test_*_performance.py"
+        command: "python -m pytest tests/performance/ -v -m performance --tb=short"
+        markers:
+          - "performance"
+        timeout: 300000 # 5 minutes
+        requires_docker: true
+
+  voting:
+    name: "Voting Service (Java/Spring Boot)"
+    path: "./voting"
+    database: "postgresql"
+    test_types:
+      unit:
+        enabled: true
+        command: "mvn test -Dtest=*Test"
+        timeout: 120000 # 2 minutes
+      integration:
+        enabled: true
+        command: "mvn test -Dtest=*IntegrationTest"
+        timeout: 300000 # 5 minutes
+        requires_docker: true
+      performance:
+        enabled: true
+        command: "mvn test -Dtest=*PerformanceTest"
+        timeout: 600000 # 10 minutes
+        requires_docker: true
+
+  recommendation:
+    name: "Recommendation Service (Go/Gin)"
+    path: "./recommendation"
+    database: "redis"
+    test_types:
+      unit:
+        enabled: true
+        command: "go test ./tests -v -run TestUnit"
+        timeout: 30000
+      integration:
+        enabled: true
+        command: "go test ./tests -v -run TestIntegration"
+        timeout: 120000
+        requires_docker: true
+      performance:
+        enabled: true
+        command: "go test ./tests -v -run TestPerformance -timeout=10m"
+        timeout: 600000
+        requires_docker: true
+
+  frontend:
+    name: "Frontend Service (Node.js/Express)"
+    path: "./frontend"
+    database: "none"
+    test_types:
+      unit:
+        enabled: true
+        command: "npm test"
+        timeout: 60000
+      integration:
+        enabled: true
+        command: "npm run test:integration"
+        timeout: 120000
+      performance:
+        enabled: true
+        command: "npm run test:performance"
+        timeout: 300000
+
+# Database configurations for testing
+databases:
+  mongodb:
+    container_image: "mongo:7.0"
+    port: 27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "testuser"
+      MONGO_INITDB_ROOT_PASSWORD: "testpass"
+      MONGO_INITDB_DATABASE: "testdb"
+    health_check:
+      command: 'mongosh --eval ''db.runCommand("ping")'''
+      interval: 10
+      timeout: 5
+      retries: 5
+
+  postgresql:
+    container_image: "postgres:15-alpine"
+    port: 5432
+    environment:
+      POSTGRES_DB: "testdb"
+      POSTGRES_USER: "testuser"
+      POSTGRES_PASSWORD: "testpass"
+    health_check:
+      command: "pg_isready -U testuser -d testdb"
+      interval: 10
+      timeout: 5
+      retries: 5
+
+  redis:
+    container_image: "redis:7-alpine"
+    port: 6379
+    health_check:
+      command: "redis-cli ping"
+      interval: 5
+      timeout: 3
+      retries: 5
+
+# Test execution environments
+environments:
+  local:
+    description: "Local development environment"
+    docker_required: true
+    parallel_services: 2
+
+  ci:
+    description: "Continuous Integration environment"
+    docker_required: true
+    parallel_services: 4
+    timeout_multiplier: 1.5
+
+  performance:
+    description: "Performance testing environment"
+    docker_required: true
+    parallel_services: 1 # Run performance tests sequentially
+    timeout_multiplier: 3.0
+
+# Test reporting configuration
+reporting:
+  formats:
+    - "junit"
+    - "html"
+    - "json"
+
+  coverage:
+    enabled: true
+    threshold: 80 # Minimum coverage percentage
+    formats:
+      - "html"
+      - "xml"
+      - "lcov"
+
+  output_directory: "./test-results"
+
+  notifications:
+    enabled: false
+    slack_webhook: ""
+    email_recipients: []
+
+# Performance testing thresholds
+performance_thresholds:
+  response_time:
+    p50: 100 # 50th percentile in milliseconds
+    p95: 500 # 95th percentile in milliseconds
+    p99: 1000 # 99th percentile in milliseconds
+
+  throughput:
+    min_requests_per_second: 100
+
+  error_rate:
+    max_percentage: 1.0 # Maximum 1% error rate
+
+  resource_usage:
+    max_memory_mb: 512
+    max_cpu_percentage: 80
+
+# Test data management
+test_data:
+  cleanup_after_tests: true
+  seed_data_enabled: true
+  fixtures_path: "./test-framework/fixtures"
+
+# Integration test configuration
+integration:
+  service_startup_timeout: 60000 # 1 minute
+  service_health_check_interval: 5000 # 5 seconds
+  max_startup_retries: 10
+
+  # Service dependencies for integration tests
+  dependencies:
+    frontend:
+      - catalogue
+      - voting
+      - recommendation
+    catalogue:
+      - mongodb
+    voting:
+      - postgresql
+    recommendation:
+      - redis
+
+# Continuous Integration specific settings
+ci_settings:
+  fail_fast: false # Continue running tests even if some fail
+  collect_artifacts: true
+  artifact_retention_days: 30
+
+  # Test execution matrix
+  matrix:
+    - environment: "ci"
+      test_types: ["unit", "integration"]
+    - environment: "performance"
+      test_types: ["performance"]
+
+# Monitoring and alerting
+monitoring:
+  enabled: false
+  metrics_endpoint: ""
+  alert_thresholds:
+    test_failure_rate: 10 # Alert if > 10% of tests fail
+    test_duration_increase: 50 # Alert if test duration increases by > 50%

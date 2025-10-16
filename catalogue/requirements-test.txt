@@ -1,0 +1,25 @@
+# Testing dependencies for catalogue service
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-xdist>=3.3.0
+coverage>=7.2.0
+
+# Mocking and test utilities
+unittest-mock>=1.0.1
+factory-boy>=3.3.0
+faker>=19.0.0
+
+# Async testing support
+asynctest>=0.13.0
+aioresponses>=0.7.4
+
+# Test database support
+motor>=3.2.0
+pymongo>=4.4.0
+
+# Additional testing utilities
+freezegun>=1.2.2  # For time mocking
+responses>=0.23.0  # For HTTP mocking
+testcontainers>=3.7.0  # For integration testing with containers

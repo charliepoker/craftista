@@ -1,0 +1,211 @@
+package com.example.voting.service;
+
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
+
+import com.example.voting.model.Origami;
+
+/**
+ * Service class that wraps database operations with circuit breaker pattern.
+ * 
+ * Provides fallback mechanisms when database operations fail and implements
+ * monitoring capabilities for circuit breaker status.
+ */
+@Service
+public class DatabaseCircuitBreakerService {
+
+    private static final Logger logger = LoggerFactory.getLogger(DatabaseCircuitBreakerService.class);
+
+    private final CircuitBreaker circuitBreaker;
+
+    @Autowired
+    public DatabaseCircuitBreakerService(CircuitBreaker databaseCircuitBreaker) {
+        this.circuitBreaker = databaseCircuitBreaker;
+    }
+
+    /**
+     * Execute a database operation with circuit breaker protection.
+     *
+     * @param operation The database operation to execute
+     * @param fallback The fallback operation if circuit breaker is open
+     * @param <T> Return type of the operation
+     * @return Result of the operation or fallback
+     */
+    public <T> T executeWithCircuitBreaker(Supplier<T> operation, Supplier<T> fallback) {
+        try {
+            return circuitBreaker.executeSupplier(operation);
+        } catch (CallNotPermittedException e) {
+            logger.warn("Circuit breaker is OPEN, executing fallback operation");
+            return fallback.get();
+        } catch (Exception e) {
+            logger.error("Database operation failed, executing fallback operation", e);
+            return fallback.get();
+        }
+    }
+
+    /**
+     * Execute a database operation with circuit breaker protection and default fallback.
+     *
+     * @param operation The database operation to execute
+     * @param <T> Return type of the operation
+     * @return Result of the operation or null if fallback is not provided
+     */
+    public <T> T executeWithCircuitBreaker(Supplier<T> operation) {
+        return executeWithCircuitBreaker(operation, () -> null);
+    }
+
+    /**
+     * Get fallback origami data when database is unavailable.
+     *
+     * @return List of basic origami data
+     */
+    public List<Origami> getFallbackOrigamiList() {
+        logger.info("Returning fallback origami data");
+        
+        // Create basic fallback origami data
+        Origami origami1 = new Origami();
+        origami1.setOrigamiId("fallback-1");
+        origami1.setName("Paper Crane");
+        origami1.setDescription("Classic origami crane - symbol of peace and hope");
+        origami1.setImageUrl("/images/origami/007-dove.png");
+        origami1.setVoteCount(0);
+        origami1.setActive(true);
+        origami1.setCreatedAt(LocalDateTime.now());
+        origami1.setUpdatedAt(LocalDateTime.now());
+
+        Origami origami2 = new Origami();
+        origami2.setOrigamiId("fallback-2");
+        origami2.setName("Paper Butterfly");
+        origami2.setDescription("Beautiful butterfly design for beginners");
+        origami2.setImageUrl("/images/origami/008-butterfly.png");
+        origami2.setVoteCount(0);
+        origami2.setActive(true);
+        origami2.setCreatedAt(LocalDateTime.now());
+        origami2.setUpdatedAt(LocalDateTime.now());
+
+        Origami origami3 = new Origami();
+        origami3.setOrigamiId("fallback-3");
+        origami3.setName("Paper Elephant");
+        origami3.setDescription("Cute elephant design with simple folds");
+        origami3.setImageUrl("/images/origami/004-elephant.png");
+        origami3.setVoteCount(0);
+        origami3.setActive(true);
+        origami3.setCreatedAt(LocalDateTime.now());
+        origami3.setUpdatedAt(LocalDateTime.now());
+
+        return List.of(origami1, origami2, origami3);
+    }
+
+    /**
+     * Get fallback origami by ID when database is unavailable.
+     *
+     * @param origamiId The ID of the origami to retrieve
+     * @return Origami data or null if not found in fallback data
+     */
+    public Origami getFallbackOrigamiById(String origamiId) {
+        logger.info("Returning fallback origami data for ID: {}", origamiId);
+        
+        List<Origami> fallbackList = getFallbackOrigamiList();
+        return fallbackList.stream()
+                .filter(origami -> origami.getOrigamiId().equals(origamiId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Get circuit breaker metrics for monitoring.
+     *
+     * @return Map containing circuit breaker metrics
+     */
+    public Map<String, Object> getCircuitBreakerMetrics() {
+        Map<String, Object> metrics = new HashMap<>();
+        
+        CircuitBreaker.Metrics cbMetrics = circuitBreaker.getMetrics();
+        
+        metrics.put("name", circuitBreaker.getName());
+        metrics.put("state", circuitBreaker.getState().toString());
+        metrics.put("failure_rate", cbMetrics.getFailureRate());
+        metrics.put("slow_call_rate", cbMetrics.getSlowCallRate());
+        metrics.put("number_of_calls", cbMetrics.getNumberOfBufferedCalls());
+        metrics.put("number_of_successful_calls", cbMetrics.getNumberOfSuccessfulCalls());
+        metrics.put("number_of_failed_calls", cbMetrics.getNumberOfFailedCalls());
+        metrics.put("number_of_slow_calls", cbMetrics.getNumberOfSlowCalls());
+        metrics.put("number_of_not_permitted_calls", cbMetrics.getNumberOfNotPermittedCalls());
+        
+        // Configuration details
+        Map<String, Object> config = new HashMap<>();
+        config.put("failure_rate_threshold", circuitBreaker.getCircuitBreakerConfig().getFailureRateThreshold());
+        config.put("slow_call_rate_threshold", circuitBreaker.getCircuitBreakerConfig().getSlowCallRateThreshold());
+        config.put("wait_duration_in_open_state", circuitBreaker.getCircuitBreakerConfig().getWaitDurationInOpenState().getSeconds());
+        config.put("sliding_window_size", circuitBreaker.getCircuitBreakerConfig().getSlidingWindowSize());
+        config.put("minimum_number_of_calls", circuitBreaker.getCircuitBreakerConfig().getMinimumNumberOfCalls());
+        config.put("permitted_calls_in_half_open_state", circuitBreaker.getCircuitBreakerConfig().getPermittedNumberOfCallsInHalfOpenState());
+        
+        metrics.put("config", config);
+        metrics.put("timestamp", LocalDateTime.now().toString());
+        
+        return metrics;
+    }
+
+    /**
+     * Get the current state of the circuit breaker.
+     *
+     * @return Circuit breaker state as string
+     */
+    public String getCircuitBreakerState() {
+        return circuitBreaker.getState().toString();
+    }
+
+    /**
+     * Check if the circuit breaker is currently open.
+     *
+     * @return true if circuit breaker is open, false otherwise
+     */
+    public boolean isCircuitBreakerOpen() {
+        return circuitBreaker.getState() == CircuitBreaker.State.OPEN;
+    }
+
+    /**
+     * Reset the circuit breaker to closed state.
+     * This should be used carefully, typically only for administrative purposes.
+     */
+    public void resetCircuitBreaker() {
+        circuitBreaker.reset();
+        logger.info("Circuit breaker has been reset to CLOSED state");
+    }
+
+    /**
+     * Transition circuit breaker to open state.
+     * This should be used carefully, typically only for administrative purposes.
+     */
+    public void openCircuitBreaker() {
+        circuitBreaker.transitionToOpenState();
+        logger.info("Circuit breaker has been transitioned to OPEN state");
+    }
+
+    /**
+     * Get detailed health information including circuit breaker status.
+     *
+     * @return Health information map
+     */
+    public Map<String, Object> getHealthInfo() {
+        Map<String, Object> health = new HashMap<>();
+        
+        health.put("status", isCircuitBreakerOpen() ? "degraded" : "healthy");
+        health.put("circuit_breaker", getCircuitBreakerMetrics());
+        health.put("fallback_available", true);
+        health.put("timestamp", LocalDateTime.now().toString());
+        
+        return health;
+    }
+}

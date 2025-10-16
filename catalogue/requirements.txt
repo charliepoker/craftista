@@ -3,3 +3,6 @@ gunicorn>=20.1.0
 requests>=2.26.0
 flask_cors>=3.0.10
 psycopg2-binary
+motor>=3.3.0
+pymongo>=4.6.0
+pydantic>=2.5.0

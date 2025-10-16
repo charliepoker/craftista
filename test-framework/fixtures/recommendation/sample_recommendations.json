@@ -1,0 +1,89 @@
+{
+  "scores": {
+    "Origami Crane": 9.2,
+    "Dragon Kit": 8.8,
+    "Butterfly Set": 8.5,
+    "Simple Flower": 7.9,
+    "Elephant Design": 8.1,
+    "Swan Elegance": 9.0,
+    "Frog Hopper": 7.5,
+    "Star Box": 8.3,
+    "Rose Bloom": 8.7,
+    "Peacock Display": 9.1
+  },
+  "user_preferences": {
+    "user_001": {
+      "favorite_categories": ["animals", "birds"],
+      "preferred_colors": ["blue", "green"],
+      "difficulty_level": "intermediate"
+    },
+    "user_002": {
+      "favorite_categories": ["flowers", "decorative"],
+      "preferred_colors": ["red", "pink", "yellow"],
+      "difficulty_level": "beginner"
+    },
+    "user_003": {
+      "favorite_categories": ["complex", "dragons"],
+      "preferred_colors": ["black", "gold"],
+      "difficulty_level": "advanced"
+    },
+    "user_004": {
+      "favorite_categories": ["simple", "kids"],
+      "preferred_colors": ["rainbow", "bright"],
+      "difficulty_level": "beginner"
+    },
+    "user_005": {
+      "favorite_categories": ["traditional", "classic"],
+      "preferred_colors": ["white", "natural"],
+      "difficulty_level": "intermediate"
+    }
+  },
+  "daily_recommendations": {
+    "2024-01-15": {
+      "featured_item": "Origami Crane",
+      "reason": "Perfect for beginners and very popular",
+      "score": 9.2
+    },
+    "2024-01-16": {
+      "featured_item": "Dragon Kit",
+      "reason": "Challenge yourself with this advanced design",
+      "score": 8.8
+    },
+    "2024-01-17": {
+      "featured_item": "Peacock Display",
+      "reason": "Beautiful and impressive centerpiece",
+      "score": 9.1
+    }
+  },
+  "trending_items": [
+    {
+      "name": "Origami Crane",
+      "trend_score": 95,
+      "weekly_growth": 15
+    },
+    {
+      "name": "Dragon Kit",
+      "trend_score": 88,
+      "weekly_growth": 22
+    },
+    {
+      "name": "Peacock Display",
+      "trend_score": 91,
+      "weekly_growth": 18
+    },
+    {
+      "name": "Rose Bloom",
+      "trend_score": 87,
+      "weekly_growth": 12
+    },
+    {
+      "name": "Star Box",
+      "trend_score": 83,
+      "weekly_growth": 8
+    }
+  ],
+  "performance_test_data": {
+    "bulk_scores": {},
+    "bulk_users": {}
+  }
+}

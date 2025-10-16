@@ -41,7 +41,7 @@ public class OrigamiSynchronizationService {
         List<Origami> origamis = fetchOrigamisFromCatalogueService();
         for (Origami origami : origamis) {
             if (origami.getOrigamiId() != null) { // Check if ID is not null
-                Optional<Origami> existingOrigami = origamiRepository.findById(origami.getOrigamiId());
+                Optional<Origami> existingOrigami = origamiRepository.findByOrigamiId(origami.getOrigamiId());
                 if (!existingOrigami.isPresent()) {
                     origamiRepository.save(origami);
                 } else {
