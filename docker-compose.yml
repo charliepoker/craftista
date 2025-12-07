@@ -11,7 +11,7 @@ services:
     container_name: craftista-mongodb
     restart: unless-stopped
     ports:
-      - "27018:27017"
+      - "27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin123}
@@ -33,7 +33,7 @@ services:
     container_name: craftista-postgres
     restart: unless-stopped
     ports:
-      - "5433:5432"
+      - "5432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-voting}
       POSTGRES_USER: ${POSTGRES_USER:-voting_user}
@@ -80,10 +80,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NODE_ENV=${NODE_ENV:-production}
+      - NODE_ENV=production
       - PRODUCTS_API_BASE_URI=http://catalogue:5000
       - RECOMMENDATION_BASE_URI=http://recco:8080
-      - VOTING_BASE_URI=http://craftista-voting:8080
+      - VOTING_BASE_URI=http://voting:8080
     depends_on:
       catalogue:
         condition: service_healthy
@@ -94,11 +94,11 @@ services:
     networks:
       - craftista-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
 
   catalogue:
     build: ./catalogue
@@ -136,7 +136,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-production}
+      - SPRING_PROFILES_ACTIVE=production
       - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-voting}
       - DATABASE_USERNAME=${POSTGRES_USER:-voting_user}
       - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-voting_pass}
@@ -145,7 +145,7 @@ services:
       - DATABASE_RETRY_ATTEMPTS=${DATABASE_RETRY_ATTEMPTS:-3}
       - CATALOGUE_SERVICE_URL=http://catalogue:5000/api/products
       - LOG_LEVEL=${VOTING_LOG_LEVEL:-INFO}
-      - FLYWAY_ENABLED=${FLYWAY_ENABLED:-true}
+      - FLYWAY_ENABLED=true
     depends_on:
       postgres:
         condition: service_healthy

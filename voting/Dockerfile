@@ -14,7 +14,7 @@ COPY scripts ./scripts
 RUN mvn package -D skipTests
 
 # Stage 2: Runtime stage
-FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jre-jammy
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

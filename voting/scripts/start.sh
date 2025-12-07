@@ -75,18 +75,16 @@ wait_for_catalogue() {
         CATALOGUE_PORT=$(echo "$CATALOGUE_SERVICE_URL" | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
         
         if [ ! -z "$CATALOGUE_HOST" ] && [ ! -z "$CATALOGUE_PORT" ]; then
-            timeout 60 bash -c "
-                until curl -f http://$CATALOGUE_HOST:$CATALOGUE_PORT/api/products > /dev/null 2>&1; do
-                    echo 'Waiting for Catalogue service...'
-                    sleep 2
-                done
-            "
-            
-            if [ $? -eq 0 ]; then
-                echo "Catalogue service is available"
-            else
-                echo "WARNING: Catalogue service did not become available within timeout"
-            fi
+            # Try for 30 seconds max
+            for i in {1..15}; do
+                if curl -f http://$CATALOGUE_HOST:$CATALOGUE_PORT/api/products > /dev/null 2>&1; then
+                    echo "Catalogue service is available"
+                    return 0
+                fi
+                echo "Waiting for Catalogue service... (attempt $i/15)"
+                sleep 2
+            done
+            echo "WARNING: Catalogue service did not become available, continuing anyway..."
         fi
     fi
 }

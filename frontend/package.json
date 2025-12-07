@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node app.js",
+    "dev": "node app.js",
     "test": "mocha test/*.js",
     "test:unit": "mocha test/appTest.js",
     "test:integration": "mocha test/integration/*.js",
