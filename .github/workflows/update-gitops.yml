@@ -1,0 +1,411 @@
+name: Update GitOps Repository
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Name of the microservice (frontend, catalogue, voting, recommendation)"
+        required: true
+        type: string
+      environment:
+        description: "Target environment (dev, staging, prod)"
+        required: true
+        type: string
+      image-tag:
+        description: "Docker image tag to deploy"
+        required: true
+        type: string
+      docker-image:
+        description: "Full Docker image name (e.g., 8060633493/craftista-frontend)"
+        required: true
+        type: string
+      commit-sha:
+        description: "Git commit SHA for traceability"
+        required: true
+        type: string
+      branch-name:
+        description: "Git branch name for traceability"
+        required: true
+        type: string
+    secrets:
+      VAULT_ADDR:
+        description: "HashiCorp Vault server address"
+        required: true
+      VAULT_TOKEN:
+        description: "HashiCorp Vault authentication token"
+        required: true
+      GITOPS_REPO_URL:
+        description: "GitOps repository URL"
+        required: false
+
+env:
+  GITOPS_REPO: 8060633493/craftista-gitops
+  GITOPS_BRANCH: main
+
+jobs:
+  update-gitops:
+    name: Update GitOps Repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate inputs
+        run: |
+          # Validate service name
+          if [[ ! "${{ inputs.service-name }}" =~ ^(frontend|catalogue|voting|recommendation)$ ]]; then
+            echo "❌ Invalid service name: ${{ inputs.service-name }}"
+            echo "Valid services: frontend, catalogue, voting, recommendation"
+            exit 1
+          fi
+
+          # Validate environment
+          if [[ ! "${{ inputs.environment }}" =~ ^(dev|staging|prod)$ ]]; then
+            echo "❌ Invalid environment: ${{ inputs.environment }}"
+            echo "Valid environments: dev, staging, prod"
+            exit 1
+          fi
+
+          echo "✅ Input validation passed"
+          echo "Service: ${{ inputs.service-name }}"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Image Tag: ${{ inputs.image-tag }}"
+
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
+      - name: Authenticate with Vault and get GitOps deploy key
+        id: vault-auth
+        run: |
+          # Set Vault address
+          export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
+          export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
+
+          # Test Vault connectivity
+          if ! vault auth -method=token; then
+            echo "❌ Failed to authenticate with Vault"
+            exit 1
+          fi
+
+          echo "✅ Successfully authenticated with Vault"
+
+          # Get GitOps repository deploy key
+          DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key 2>/dev/null || echo "")
+
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "⚠️ GitOps deploy key not found in Vault, falling back to PAT"
+            # Try to get PAT as fallback
+            GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
+            if [[ -n "$GITOPS_PAT" ]]; then
+              echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
+              echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Neither deploy key nor PAT found in Vault"
+              exit 1
+            fi
+          else
+            echo "✅ Retrieved GitOps deploy key from Vault"
+            echo "gitops-auth-method=ssh" >> $GITHUB_OUTPUT
+            
+            # Save deploy key to file
+            mkdir -p ~/.ssh
+            echo "$DEPLOY_KEY" > ~/.ssh/gitops_deploy_key
+            chmod 600 ~/.ssh/gitops_deploy_key
+            
+            # Configure SSH
+            cat >> ~/.ssh/config <<EOF
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/gitops_deploy_key
+            StrictHostKeyChecking no
+          EOF
+          fi
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ steps.vault-auth.outputs.gitops-auth-method == 'pat' && steps.vault-auth.outputs.gitops-token || '' }}
+          ssh-key: ${{ steps.vault-auth.outputs.gitops-auth-method == 'ssh' && '~/.ssh/gitops_deploy_key' || '' }}
+          path: gitops
+          fetch-depth: 0
+
+      - name: Configure Git
+        working-directory: gitops
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions+gitops@github.com"
+
+          # Ensure we're on the correct branch
+          git checkout ${{ env.GITOPS_BRANCH }}
+          git pull origin ${{ env.GITOPS_BRANCH }}
+
+      - name: Update Kubernetes overlay manifests
+        id: update-k8s
+        working-directory: gitops
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          DOCKER_IMAGE="${{ inputs.docker-image }}"
+
+          OVERLAY_PATH="kubernetes/overlays/${ENV}/${SERVICE}"
+          KUSTOMIZATION_FILE="${OVERLAY_PATH}/kustomization.yaml"
+
+          echo "Updating Kubernetes overlay at: $OVERLAY_PATH"
+
+          if [[ ! -d "$OVERLAY_PATH" ]]; then
+            echo "❌ Overlay directory not found: $OVERLAY_PATH"
+            echo "Available overlays:"
+            find kubernetes/overlays -type d -name "$SERVICE" || true
+            exit 1
+          fi
+
+          if [[ ! -f "$KUSTOMIZATION_FILE" ]]; then
+            echo "❌ Kustomization file not found: $KUSTOMIZATION_FILE"
+            exit 1
+          fi
+
+          # Backup original file
+          cp "$KUSTOMIZATION_FILE" "${KUSTOMIZATION_FILE}.backup"
+
+          # Update or add images section
+          if grep -q "images:" "$KUSTOMIZATION_FILE"; then
+            echo "Updating existing images section..."
+            
+            # Check if our image already exists
+            if grep -q "name: $DOCKER_IMAGE" "$KUSTOMIZATION_FILE"; then
+              # Update existing image tag
+              sed -i "/name: $DOCKER_IMAGE/,/newTag:/ s/newTag:.*/newTag: $IMAGE_TAG/" "$KUSTOMIZATION_FILE"
+            else
+              # Add new image entry
+              sed -i "/images:/a\\  - name: $DOCKER_IMAGE\\n    newTag: $IMAGE_TAG" "$KUSTOMIZATION_FILE"
+            fi
+          else
+            echo "Adding new images section..."
+            cat >> "$KUSTOMIZATION_FILE" <<EOF
+
+          images:
+            - name: $DOCKER_IMAGE
+              newTag: $IMAGE_TAG
+          EOF
+          fi
+
+          echo "✅ Updated Kubernetes overlay"
+          echo "k8s-updated=true" >> $GITHUB_OUTPUT
+
+      - name: Update Helm values files
+        id: update-helm
+        working-directory: gitops
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+
+          HELM_CHART_PATH="helm/charts/${SERVICE}"
+          VALUES_FILE="${HELM_CHART_PATH}/values-${ENV}.yaml"
+
+          echo "Checking for Helm chart at: $HELM_CHART_PATH"
+
+          if [[ -d "$HELM_CHART_PATH" ]]; then
+            echo "Found Helm chart directory"
+            
+            if [[ -f "$VALUES_FILE" ]]; then
+              echo "Updating Helm values file: $VALUES_FILE"
+              
+              # Backup original file
+              cp "$VALUES_FILE" "${VALUES_FILE}.backup"
+              
+              # Update image tag in values file
+              if grep -q "tag:" "$VALUES_FILE"; then
+                sed -i "s/tag:.*/tag: \"$IMAGE_TAG\"/" "$VALUES_FILE"
+                echo "✅ Updated Helm values file"
+                echo "helm-updated=true" >> $GITHUB_OUTPUT
+              else
+                echo "⚠️ No image tag found in Helm values file"
+                echo "helm-updated=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "⚠️ Helm values file not found: $VALUES_FILE"
+              echo "helm-updated=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ Helm chart directory not found: $HELM_CHART_PATH"
+            echo "helm-updated=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify changes
+        working-directory: gitops
+        run: |
+          echo "=== Git Status ==="
+          git status
+
+          echo "=== Changed Files ==="
+          git diff --name-only
+
+          echo "=== Diff Summary ==="
+          git diff --stat
+
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "⚠️ No changes detected in GitOps repository"
+            echo "This might indicate the image tag was already up to date"
+          else
+            echo "✅ Changes detected and ready to commit"
+          fi
+
+      - name: Commit and push changes
+        id: commit
+        working-directory: gitops
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          COMMIT_SHA="${{ inputs.commit-sha }}"
+          BRANCH_NAME="${{ inputs.branch-name }}"
+
+          # Check if there are changes to commit
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No changes to commit"
+            echo "committed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Stage all changes
+          git add .
+
+          # Create descriptive commit message
+          COMMIT_MSG="Update $SERVICE image to $IMAGE_TAG in $ENV environment
+
+          Source commit: $COMMIT_SHA
+          Source branch: $BRANCH_NAME
+          Service: $SERVICE
+          Environment: $ENV
+          Image tag: $IMAGE_TAG
+
+          Updated by: GitHub Actions
+          Workflow: ${{ github.workflow }}
+          Run ID: ${{ github.run_id }}"
+
+          # Attempt to commit and push with retry logic
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
+            if git commit -m "$COMMIT_MSG"; then
+              echo "✅ Changes committed successfully"
+              
+              # Try to push
+              if git push origin ${{ env.GITOPS_BRANCH }}; then
+                echo "✅ Changes pushed successfully"
+                echo "committed=true" >> $GITHUB_OUTPUT
+                break
+              else
+                echo "⚠️ Push failed, attempting to resolve conflicts..."
+                
+                # Pull latest changes and try to rebase
+                git pull --rebase origin ${{ env.GITOPS_BRANCH }}
+                
+                # Check if rebase was successful
+                if [[ $? -eq 0 ]]; then
+                  echo "✅ Rebase successful, retrying push..."
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                else
+                  echo "❌ Rebase failed, manual intervention required"
+                  echo "committed=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            else
+              echo "❌ Commit failed"
+              echo "committed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          done
+
+          if [[ $RETRY_COUNT -eq $MAX_RETRIES ]]; then
+            echo "❌ Failed to push after $MAX_RETRIES attempts"
+            echo "committed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Handle merge conflicts and notifications
+        if: failure()
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+
+          echo "❌ GitOps update failed for $SERVICE in $ENV environment"
+          echo "Image tag: $IMAGE_TAG"
+          echo "Commit SHA: ${{ inputs.commit-sha }}"
+          echo "Branch: ${{ inputs.branch-name }}"
+
+          # Create GitHub issue or notification (if configured)
+          cat > /tmp/failure-summary.md <<EOF
+          # GitOps Update Failed
+
+          **Service:** $SERVICE
+          **Environment:** $ENV  
+          **Image Tag:** $IMAGE_TAG
+          **Source Commit:** ${{ inputs.commit-sha }}
+          **Source Branch:** ${{ inputs.branch-name }}
+
+          ## Error Details
+          The automated GitOps update failed. This could be due to:
+          - Merge conflicts in the GitOps repository
+          - Network connectivity issues
+          - Authentication problems
+          - Missing files or directories
+
+          ## Manual Resolution Required
+          Please check the GitOps repository and manually update the image tag if needed.
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+
+          echo "Failure summary created at /tmp/failure-summary.md"
+          cat /tmp/failure-summary.md
+
+      - name: Create success notification
+        if: success() && steps.commit.outputs.committed == 'true'
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+
+          echo "✅ GitOps Update Successful"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Service: $SERVICE"
+          echo "Environment: $ENV"
+          echo "Image Tag: $IMAGE_TAG"
+          echo "Source Commit: ${{ inputs.commit-sha }}"
+          echo "Source Branch: ${{ inputs.branch-name }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "The GitOps repository has been updated successfully."
+          echo "ArgoCD should detect the changes and deploy the new image."
+          echo ""
+          echo "Updated files:"
+          if [[ "${{ steps.update-k8s.outputs.k8s-updated }}" == "true" ]]; then
+            echo "  ✅ Kubernetes overlay: kubernetes/overlays/$ENV/$SERVICE/kustomization.yaml"
+          fi
+          if [[ "${{ steps.update-helm.outputs.helm-updated }}" == "true" ]]; then
+            echo "  ✅ Helm values: helm/charts/$SERVICE/values-$ENV.yaml"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Clean up SSH keys and sensitive files
+          rm -f ~/.ssh/gitops_deploy_key
+          rm -f ~/.ssh/config
+
+          # Clean up backup files in gitops directory
+          if [[ -d "gitops" ]]; then
+            find gitops -name "*.backup" -delete
+          fi
+
+          echo "✅ Cleanup completed"

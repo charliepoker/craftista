@@ -700,3 +700,9 @@ local.yaml
 override.json
 override.yml
 override.yaml
+
+/misc
+/terraform 
+/gitops
+/Users/charlie/Desktop/craftista/test-framework
+/run_unit_tests.sh
