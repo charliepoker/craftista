@@ -35,7 +35,42 @@ kubectl patch deployment voting -n craftista-prod --type='json' \
 - Use ArgoCD's "hard refresh" to sync from Git when manual changes are detected
 - Monitor for configuration drift using ArgoCD's diff view
 
-## Next Steps
-- Verify pods are now running correctly
-- Address any remaining ImagePullBackOff issues (separate from secret references)
-- Ensure ArgoCD is syncing properly to prevent future drift
+## Resolution Status
+
+### ✅ Completed
+- Fixed secret reference issues in cluster deployments
+- Frontend service is running successfully (3/3 pods)
+- Cleaned up failed pods and replicasets
+
+### ⚠️ Remaining Issues
+- **Image Pull Authentication**: Backend services (catalogue, recommendation, voting) failing with 401 Unauthorized errors
+- **Root Cause**: Docker Hub registry requires authentication for private repositories
+- **Current Status**: Backend services scaled to 0 replicas to prevent resource waste
+
+### 🔧 Temporary Resolution
+```bash
+# Scaled down problematic services
+kubectl scale deployment catalogue recommendation voting -n craftista-prod --replicas=0
+```
+
+### 📋 Next Steps
+1. **Fix Docker Registry Authentication**:
+   - Verify `dockerhub-pull-secret` is valid and not expired
+   - Update Docker Hub credentials if needed
+   - Or migrate to public images/different registry
+
+2. **Alternative Solutions**:
+   - Build and push images to ECR (AWS Container Registry)
+   - Use public base images for development
+   - Set up proper CI/CD pipeline for image builds
+
+3. **Scale Services Back Up**:
+   ```bash
+   kubectl scale deployment catalogue recommendation voting -n craftista-prod --replicas=3
+   ```
+
+### 🎯 Current Working Services
+- ✅ Frontend: 3/3 pods running successfully
+- ❌ Catalogue: 0/3 (scaled down due to image pull issues)
+- ❌ Recommendation: 0/3 (scaled down due to image pull issues)  
+- ❌ Voting: 0/3 (scaled down due to image pull issues)
