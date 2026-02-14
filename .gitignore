@@ -706,3 +706,5 @@ override.yaml
 /gitops
 /Users/charlie/Desktop/craftista/test-framework
 /run_unit_tests.sh
+
+PRODUCTION_DEPLOYMENT_ANALYSIS.md
