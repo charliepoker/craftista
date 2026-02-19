@@ -39,7 +39,7 @@ on:
         required: false
 
 env:
-  GITOPS_REPO: 8060633493/craftista-gitops
+  GITOPS_REPO: 8060633493/craftista-gitOps
   GITOPS_BRANCH: main
 
 jobs:

@@ -708,3 +708,7 @@ override.yaml
 /run_unit_tests.sh
 
 PRODUCTION_DEPLOYMENT_ANALYSIS.md
+
+/Users/charlie/Desktop/craftista/docs/sonarqube-baremetal-cloudflare.md/*
+/Users/charlie/Desktop/craftista/.github/workflows/PRODUCTION_SETUP.md
+/Users/charlie/Desktop/craftista/.github/workflows/README.md

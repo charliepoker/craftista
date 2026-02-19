@@ -1,0 +1,458 @@
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      service-name:
+        description: "Service to rollback"
+        required: true
+        type: choice
+        options:
+          - frontend
+          - catalogue
+          - voting
+          - recommendation
+      environment:
+        description: "Environment to rollback"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      rollback-to:
+        description: "Rollback strategy"
+        required: true
+        type: choice
+        options:
+          - previous-revision
+          - specific-revision
+          - specific-image-tag
+      revision-number:
+        description: "Specific revision number (if rollback-to is specific-revision)"
+        required: false
+        type: string
+      image-tag:
+        description: "Specific image tag (if rollback-to is specific-image-tag)"
+        required: false
+        type: string
+      reason:
+        description: "Reason for rollback"
+        required: true
+        type: string
+
+env:
+  GITOPS_REPO: 8060633493/craftista-gitOps
+  GITOPS_BRANCH: main
+
+jobs:
+  validate-rollback:
+    name: Validate Rollback Request
+    runs-on: ubuntu-latest
+    outputs:
+      approved: ${{ steps.validate.outputs.approved }}
+      target-revision: ${{ steps.validate.outputs.target-revision }}
+      target-image: ${{ steps.validate.outputs.target-image }}
+
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          STRATEGY="${{ inputs.rollback-to }}"
+
+          echo "🔍 Validating rollback request..."
+          echo "Service: $SERVICE"
+          echo "Environment: $ENV"
+          echo "Strategy: $STRATEGY"
+          echo "Reason: ${{ inputs.reason }}"
+
+          # Validate service name
+          if [[ ! "$SERVICE" =~ ^(frontend|catalogue|voting|recommendation)$ ]]; then
+            echo "❌ Invalid service name"
+            exit 1
+          fi
+
+          # Validate environment
+          if [[ ! "$ENV" =~ ^(dev|staging|prod)$ ]]; then
+            echo "❌ Invalid environment"
+            exit 1
+          fi
+
+          # Validate strategy-specific inputs
+          if [[ "$STRATEGY" == "specific-revision" ]] && [[ -z "${{ inputs.revision-number }}" ]]; then
+            echo "❌ Revision number required for specific-revision strategy"
+            exit 1
+          fi
+
+          if [[ "$STRATEGY" == "specific-image-tag" ]] && [[ -z "${{ inputs.image-tag }}" ]]; then
+            echo "❌ Image tag required for specific-image-tag strategy"
+            exit 1
+          fi
+
+          # Production rollbacks require additional approval
+          if [[ "$ENV" == "prod" ]]; then
+            echo "⚠️ Production rollback detected - requires manual approval"
+            echo "approved=pending" >> $GITHUB_OUTPUT
+          else
+            echo "approved=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "✅ Validation passed"
+
+      - name: Request production approval
+        if: inputs.environment == 'prod'
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ github.actor }}
+          minimum-approvals: 1
+          issue-title: "Production Rollback Approval Required"
+          issue-body: |
+            ## Production Rollback Request
+
+            **Service:** ${{ inputs.service-name }}
+            **Environment:** ${{ inputs.environment }}
+            **Strategy:** ${{ inputs.rollback-to }}
+            **Reason:** ${{ inputs.reason }}
+
+            **Requested by:** @${{ github.actor }}
+
+            Please review and approve this rollback request.
+
+  execute-rollback:
+    name: Execute Rollback
+    runs-on: ubuntu-latest
+    needs: validate-rollback
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://craftista-${{ inputs.environment }}.example.com
+
+    steps:
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: "v1.28.0"
+
+      - name: Get kubeconfig from Vault
+        run: |
+          export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
+          export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
+
+          vault auth -method=token
+
+          KUBECONFIG_PATH="secret/kubernetes/${{ inputs.environment }}/kubeconfig"
+          vault kv get -field=config "$KUBECONFIG_PATH" > /tmp/kubeconfig
+
+          echo "✅ Retrieved kubeconfig"
+
+      - name: Rollback using kubectl
+        if: inputs.rollback-to == 'previous-revision'
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          NAMESPACE="craftista-${{ inputs.environment }}"
+
+          echo "🔄 Rolling back $SERVICE to previous revision..."
+
+          # Get current revision
+          CURRENT_REVISION=$(kubectl rollout history deployment/"$SERVICE" -n "$NAMESPACE" | tail -1 | awk '{print $1}')
+          echo "Current revision: $CURRENT_REVISION"
+
+          # Perform rollback
+          if kubectl rollout undo deployment/"$SERVICE" -n "$NAMESPACE"; then
+            echo "✅ Rollback initiated"
+            
+            # Wait for rollback to complete
+            kubectl rollout status deployment/"$SERVICE" -n "$NAMESPACE" --timeout=5m
+            
+            # Get new revision
+            NEW_REVISION=$(kubectl rollout history deployment/"$SERVICE" -n "$NAMESPACE" | tail -1 | awk '{print $1}')
+            echo "New revision: $NEW_REVISION"
+            
+            echo "✅ Rollback completed successfully"
+          else
+            echo "❌ Rollback failed"
+            exit 1
+          fi
+
+      - name: Rollback to specific revision
+        if: inputs.rollback-to == 'specific-revision'
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          NAMESPACE="craftista-${{ inputs.environment }}"
+          REVISION="${{ inputs.revision-number }}"
+
+          echo "🔄 Rolling back $SERVICE to revision $REVISION..."
+
+          # Verify revision exists
+          if ! kubectl rollout history deployment/"$SERVICE" -n "$NAMESPACE" | grep -q "^$REVISION"; then
+            echo "❌ Revision $REVISION not found"
+            echo "Available revisions:"
+            kubectl rollout history deployment/"$SERVICE" -n "$NAMESPACE"
+            exit 1
+          fi
+
+          # Perform rollback
+          if kubectl rollout undo deployment/"$SERVICE" -n "$NAMESPACE" --to-revision="$REVISION"; then
+            echo "✅ Rollback initiated"
+            kubectl rollout status deployment/"$SERVICE" -n "$NAMESPACE" --timeout=5m
+            echo "✅ Rollback completed successfully"
+          else
+            echo "❌ Rollback failed"
+            exit 1
+          fi
+
+      - name: Rollback using GitOps
+        if: inputs.rollback-to == 'specific-image-tag'
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+
+          echo "🔄 Rolling back $SERVICE to image tag $IMAGE_TAG via GitOps..."
+
+          # Get GitOps credentials from Vault
+          export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
+          export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
+
+          vault auth -method=token
+
+          GITOPS_DEPLOY_KEY=""
+          if vault kv get -field=private_key secret/github-actions/gitops-deploy-key >/dev/null 2>&1; then
+            GITOPS_DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key)
+          fi
+
+          rm -rf gitops
+
+          # Clone GitOps repo
+          if [[ -n "$GITOPS_DEPLOY_KEY" ]]; then
+            echo "Using deploy key (SSH)"
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            printf "%s\n" "$GITOPS_DEPLOY_KEY" > ~/.ssh/gitops_deploy_key
+            chmod 600 ~/.ssh/gitops_deploy_key
+
+            ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+            export GIT_SSH_COMMAND="ssh -i ~/.ssh/gitops_deploy_key -o IdentitiesOnly=yes"
+            git clone git@github.com:${{ env.GITOPS_REPO }}.git gitops
+          else
+            echo "Deploy key not available; falling back to PAT (HTTPS)"
+            GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat)
+            git clone https://x-access-token:$GITOPS_PAT@github.com/${{ env.GITOPS_REPO }}.git gitops
+          fi
+          cd gitops
+
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions+rollback@github.com"
+
+          # Update image tag in kustomization
+          KUSTOMIZATION_FILE="kubernetes/overlays/$ENV/$SERVICE/kustomization.yaml"
+
+          if [[ ! -f "$KUSTOMIZATION_FILE" ]]; then
+            echo "❌ Kustomization file not found"
+            exit 1
+          fi
+
+          # Get current image name
+          DOCKER_IMAGE=$(grep "name:" "$KUSTOMIZATION_FILE" | grep -v "^#" | head -1 | awk '{print $2}')
+
+          # Update image tag
+          sed -i "/name: $DOCKER_IMAGE/,/newTag:/ s/newTag:.*/newTag: $IMAGE_TAG/" "$KUSTOMIZATION_FILE"
+
+          # Commit and push
+          git add "$KUSTOMIZATION_FILE"
+          git commit -m "Rollback $SERVICE to $IMAGE_TAG in $ENV
+
+          Reason: ${{ inputs.reason }}
+          Requested by: ${{ github.actor }}
+          Workflow: ${{ github.workflow }}
+          Run ID: ${{ github.run_id }}"
+
+          git push origin ${{ env.GITOPS_BRANCH }}
+
+          echo "✅ GitOps repository updated"
+
+      - name: Verify rollback
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          NAMESPACE="craftista-${{ inputs.environment }}"
+
+          echo "🔍 Verifying rollback..."
+
+          # Wait for rollout to stabilize
+          sleep 10
+
+          # Check deployment status
+          kubectl get deployment "$SERVICE" -n "$NAMESPACE"
+
+          # Check pod status
+          kubectl get pods -n "$NAMESPACE" -l app="$SERVICE"
+
+          # Get current image
+          CURRENT_IMAGE=$(kubectl get deployment "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "Current image: $CURRENT_IMAGE"
+
+          # Check if pods are running
+          RUNNING_PODS=$(kubectl get pods -n "$NAMESPACE" -l app="$SERVICE" -o json | jq -r '.items[] | select(.status.phase=="Running") | .metadata.name' | wc -l)
+
+          if [[ $RUNNING_PODS -gt 0 ]]; then
+            echo "✅ Rollback verification passed - $RUNNING_PODS pods running"
+          else
+            echo "❌ Rollback verification failed - no pods running"
+            exit 1
+          fi
+
+      - name: Run smoke tests
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          NAMESPACE="craftista-${{ inputs.environment }}"
+
+          echo "🧪 Running smoke tests..."
+
+          # Get a pod name
+          POD_NAME=$(kubectl get pods -n "$NAMESPACE" -l app="$SERVICE" -o jsonpath='{.items[0].metadata.name}')
+
+          if [[ -z "$POD_NAME" ]]; then
+            echo "❌ No pods found"
+            exit 1
+          fi
+
+          # Port forward
+          kubectl port-forward -n "$NAMESPACE" "$POD_NAME" 8888:8080 &
+          PF_PID=$!
+          sleep 3
+
+          # Test health endpoint
+          if curl -f -s "http://localhost:8888/health" > /dev/null; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed"
+            kill $PF_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Kill port-forward
+          kill $PF_PID 2>/dev/null || true
+
+          echo "✅ Smoke tests passed"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f /tmp/kubeconfig
+          rm -rf gitops
+          echo "✅ Cleanup completed"
+
+  notify-rollback:
+    name: Notify Rollback Status
+    runs-on: ubuntu-latest
+    needs: [validate-rollback, execute-rollback]
+    if: always()
+
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          if [[ "${{ needs.execute-rollback.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create rollback report
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          # Rollback Report
+
+          ## Status: ${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.status }}
+
+          ### Details
+
+          - **Service**: ${{ inputs.service-name }}
+          - **Environment**: ${{ inputs.environment }}
+          - **Strategy**: ${{ inputs.rollback-to }}
+          - **Reason**: ${{ inputs.reason }}
+          - **Requested by**: @${{ github.actor }}
+          - **Timestamp**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ### Actions Taken
+
+          1. Validated rollback request
+          2. Executed rollback using ${{ inputs.rollback-to }} strategy
+          3. Verified deployment health
+          4. Ran smoke tests
+
+          ### Next Steps
+
+          - Monitor application logs for errors
+          - Check application metrics
+          - Verify end-to-end functionality
+          - Investigate root cause of the issue that required rollback
+          EOF
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ steps.status.outputs.emoji }} Rollback ${{ steps.status.outputs.status }} for ${{ inputs.service-name }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.emoji }} Rollback ${{ steps.status.outputs.status }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Service:*\n${{ inputs.service-name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\n${{ inputs.environment }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Strategy:*\n${{ inputs.rollback-to }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Requested by:*\n@${{ github.actor }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Reason:*\n${{ inputs.reason }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

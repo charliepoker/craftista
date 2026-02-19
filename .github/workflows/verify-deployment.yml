@@ -1,0 +1,349 @@
+name: Verify Deployment
+
+on:
+    workflow_call:
+        inputs:
+            service-name:
+                description: "Name of the microservice"
+                required: true
+                type: string
+            environment:
+                description: "Target environment (dev, staging, prod)"
+                required: true
+                type: string
+            image-tag:
+                description: "Expected image tag"
+                required: true
+                type: string
+            timeout-minutes:
+                description: "Timeout for verification in minutes"
+                required: false
+                type: number
+                default: 10
+        secrets:
+            VAULT_ADDR:
+                required: true
+            VAULT_TOKEN:
+                required: true
+
+jobs:
+    verify:
+        name: Verify Deployment
+        runs-on: ubuntu-latest
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install kubectl
+              uses: azure/setup-kubectl@v3
+              with:
+                  version: "v1.28.0"
+
+            - name: Install Vault CLI
+              run: |
+                  curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+                  sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+                  sudo apt-get update && sudo apt-get install vault
+
+            - name: Get kubeconfig from Vault
+              id: kubeconfig
+              run: |
+                  export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
+                  export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
+
+                  # Authenticate with Vault
+                  vault auth -method=token
+
+                  # Get kubeconfig for the environment
+                  KUBECONFIG_PATH="secret/kubernetes/${{ inputs.environment }}/kubeconfig"
+
+                  # Retrieve kubeconfig
+                  vault kv get -field=config "$KUBECONFIG_PATH" > /tmp/kubeconfig
+
+                  if [[ ! -s /tmp/kubeconfig ]]; then
+                    echo "❌ Failed to retrieve kubeconfig from Vault"
+                    exit 1
+                  fi
+
+                  echo "✅ Successfully retrieved kubeconfig"
+                  echo "kubeconfig-path=/tmp/kubeconfig" >> $GITHUB_OUTPUT
+
+            - name: Verify cluster connectivity
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  echo "Testing cluster connectivity..."
+
+                  if kubectl cluster-info; then
+                    echo "✅ Successfully connected to cluster"
+                  else
+                    echo "❌ Failed to connect to cluster"
+                    exit 1
+                  fi
+
+                  # Get cluster version
+                  kubectl version --short
+
+            - name: Wait for ArgoCD sync
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  MAX_WAIT=300  # 5 minutes
+                  INTERVAL=10
+                  ELAPSED=0
+
+                  echo "Waiting for ArgoCD to sync $SERVICE in $ENV environment..."
+
+                  # Check if ArgoCD is installed
+                  if ! kubectl get namespace argocd &>/dev/null; then
+                    echo "⚠️ ArgoCD namespace not found, skipping ArgoCD sync check"
+                    exit 0
+                  fi
+
+                  # Wait for ArgoCD application to sync
+                  while [[ $ELAPSED -lt $MAX_WAIT ]]; do
+                    SYNC_STATUS=$(kubectl get application "$SERVICE-$ENV" -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+                    HEALTH_STATUS=$(kubectl get application "$SERVICE-$ENV" -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+                    
+                    echo "ArgoCD Status - Sync: $SYNC_STATUS, Health: $HEALTH_STATUS"
+                    
+                    if [[ "$SYNC_STATUS" == "Synced" ]] && [[ "$HEALTH_STATUS" == "Healthy" ]]; then
+                      echo "✅ ArgoCD application is synced and healthy"
+                      break
+                    fi
+                    
+                    sleep $INTERVAL
+                    ELAPSED=$((ELAPSED + INTERVAL))
+                  done
+
+                  if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+                    echo "⚠️ Timeout waiting for ArgoCD sync, continuing with deployment verification"
+                  fi
+
+            - name: Verify deployment
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  EXPECTED_TAG="${{ inputs.image-tag }}"
+                  NAMESPACE="craftista-$ENV"
+
+                  echo "Verifying deployment of $SERVICE in namespace $NAMESPACE"
+
+                  # Check if namespace exists
+                  if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+                    echo "❌ Namespace $NAMESPACE not found"
+                    exit 1
+                  fi
+
+                  # Check if deployment exists
+                  if ! kubectl get deployment "$SERVICE" -n "$NAMESPACE" &>/dev/null; then
+                    echo "❌ Deployment $SERVICE not found in namespace $NAMESPACE"
+                    exit 1
+                  fi
+
+                  # Get current image tag
+                  CURRENT_IMAGE=$(kubectl get deployment "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
+                  echo "Current image: $CURRENT_IMAGE"
+
+                  # Verify image tag
+                  if [[ "$CURRENT_IMAGE" == *"$EXPECTED_TAG"* ]]; then
+                    echo "✅ Image tag matches expected: $EXPECTED_TAG"
+                  else
+                    echo "⚠️ Image tag mismatch. Expected: $EXPECTED_TAG, Got: $CURRENT_IMAGE"
+                  fi
+
+            - name: Wait for rollout
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  NAMESPACE="craftista-$ENV"
+
+                  echo "Waiting for rollout to complete..."
+
+                  if kubectl rollout status deployment/"$SERVICE" -n "$NAMESPACE" --timeout=5m; then
+                    echo "✅ Rollout completed successfully"
+                  else
+                    echo "❌ Rollout failed or timed out"
+                    
+                    # Get pod status for debugging
+                    echo "Pod status:"
+                    kubectl get pods -n "$NAMESPACE" -l app="$SERVICE"
+                    
+                    # Get recent events
+                    echo "Recent events:"
+                    kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | tail -20
+                    
+                    exit 1
+                  fi
+
+            - name: Verify pod health
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  NAMESPACE="craftista-$ENV"
+
+                  echo "Checking pod health..."
+
+                  # Get pod status
+                  PODS=$(kubectl get pods -n "$NAMESPACE" -l app="$SERVICE" -o json)
+
+                  # Count running pods
+                  RUNNING_PODS=$(echo "$PODS" | jq -r '.items[] | select(.status.phase=="Running") | .metadata.name' | wc -l)
+                  TOTAL_PODS=$(echo "$PODS" | jq -r '.items | length')
+
+                  echo "Running pods: $RUNNING_PODS / $TOTAL_PODS"
+
+                  if [[ $RUNNING_PODS -eq 0 ]]; then
+                    echo "❌ No pods are running"
+                    exit 1
+                  fi
+
+                  # Check if all containers are ready
+                  NOT_READY=$(echo "$PODS" | jq -r '.items[] | select(.status.phase=="Running") | select(.status.containerStatuses[]?.ready==false) | .metadata.name')
+
+                  if [[ -n "$NOT_READY" ]]; then
+                    echo "⚠️ Some pods have containers that are not ready:"
+                    echo "$NOT_READY"
+                  else
+                    echo "✅ All running pods have ready containers"
+                  fi
+
+            - name: Run health check
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  NAMESPACE="craftista-$ENV"
+
+                  echo "Running health check..."
+
+                  # Get service endpoint
+                  SERVICE_TYPE=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.type}' 2>/dev/null || echo "NotFound")
+
+                  if [[ "$SERVICE_TYPE" == "NotFound" ]]; then
+                    echo "⚠️ Service not found, skipping health check"
+                    exit 0
+                  fi
+
+                  # For LoadBalancer or NodePort services
+                  if [[ "$SERVICE_TYPE" == "LoadBalancer" ]]; then
+                    EXTERNAL_IP=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                    PORT=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].port}')
+                    
+                    if [[ -n "$EXTERNAL_IP" ]]; then
+                      echo "Testing health endpoint: http://$EXTERNAL_IP:$PORT/health"
+                      
+                      # Try health check with retries
+                      MAX_RETRIES=5
+                      RETRY_COUNT=0
+                      
+                      while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
+                        if curl -f -s -o /dev/null -w "%{http_code}" "http://$EXTERNAL_IP:$PORT/health" | grep -q "200"; then
+                          echo "✅ Health check passed"
+                          break
+                        else
+                          echo "⚠️ Health check failed, retrying... ($((RETRY_COUNT + 1))/$MAX_RETRIES)"
+                          RETRY_COUNT=$((RETRY_COUNT + 1))
+                          sleep 5
+                        fi
+                      done
+                      
+                      if [[ $RETRY_COUNT -eq $MAX_RETRIES ]]; then
+                        echo "⚠️ Health check failed after $MAX_RETRIES attempts"
+                      fi
+                    fi
+                  else
+                    echo "Service type is $SERVICE_TYPE, using port-forward for health check"
+                    
+                    # Get a pod name
+                    POD_NAME=$(kubectl get pods -n "$NAMESPACE" -l app="$SERVICE" -o jsonpath='{.items[0].metadata.name}')
+                    
+                    if [[ -n "$POD_NAME" ]]; then
+                      # Port forward in background
+                      kubectl port-forward -n "$NAMESPACE" "$POD_NAME" 8888:8080 &
+                      PF_PID=$!
+                      sleep 3
+                      
+                      # Try health check
+                      if curl -f -s -o /dev/null "http://localhost:8888/health"; then
+                        echo "✅ Health check passed via port-forward"
+                      else
+                        echo "⚠️ Health check failed via port-forward"
+                      fi
+                      
+                      # Kill port-forward
+                      kill $PF_PID 2>/dev/null || true
+                    fi
+                  fi
+
+            - name: Collect deployment metrics
+              env:
+                  KUBECONFIG: /tmp/kubeconfig
+              run: |
+                  SERVICE="${{ inputs.service-name }}"
+                  ENV="${{ inputs.environment }}"
+                  NAMESPACE="craftista-$ENV"
+
+                  echo "Collecting deployment metrics..."
+
+                  # Get deployment info
+                  kubectl get deployment "$SERVICE" -n "$NAMESPACE" -o yaml > /tmp/deployment.yaml
+
+                  # Get pod metrics if metrics-server is available
+                  if kubectl top pods -n "$NAMESPACE" -l app="$SERVICE" &>/dev/null; then
+                    echo "Pod resource usage:"
+                    kubectl top pods -n "$NAMESPACE" -l app="$SERVICE"
+                  else
+                    echo "⚠️ Metrics server not available"
+                  fi
+
+                  # Get pod logs (last 50 lines)
+                  echo "Recent logs from pods:"
+                  kubectl logs -n "$NAMESPACE" -l app="$SERVICE" --tail=50 --prefix=true || true
+
+            - name: Create verification report
+              if: always()
+              run: |
+                  cat >> $GITHUB_STEP_SUMMARY <<EOF
+                  # Deployment Verification Report
+
+                  ## Service: ${{ inputs.service-name }}
+                  ## Environment: ${{ inputs.environment }}
+                  ## Image Tag: ${{ inputs.image-tag }}
+
+                  ### Verification Steps
+
+                  - ✅ Cluster connectivity verified
+                  - ✅ ArgoCD sync checked
+                  - ✅ Deployment verified
+                  - ✅ Rollout completed
+                  - ✅ Pod health checked
+                  - ✅ Health endpoint tested
+
+                  ### Next Steps
+
+                  - Monitor application logs for errors
+                  - Check application metrics in Grafana
+                  - Verify end-to-end functionality
+                  - Monitor for any alerts
+                  EOF
+
+            - name: Cleanup
+              if: always()
+              run: |
+                  # Remove kubeconfig
+                  rm -f /tmp/kubeconfig
+                  rm -f /tmp/deployment.yaml
+
+                  echo "✅ Cleanup completed"

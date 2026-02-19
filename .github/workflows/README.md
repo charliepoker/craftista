@@ -80,7 +80,7 @@ Each service workflow follows the same pattern:
 4. **Build Image**: Build and push Docker image to DockerHub
 5. **Container Scan**: Scan Docker image with Trivy
 6. **Determine Environment**: Map Git branch to deployment environment
-7. **Update GitOps**: Call reusable workflow to update craftista-gitops repository
+7. **Update GitOps**: Call reusable workflow to update craftista-gitOps repository
 8. **Notify**: Send build status notification
 
 ## Triggers
@@ -191,7 +191,7 @@ The workflow supports both Kubernetes overlays (using Kustomize) and Helm charts
 ### GitOps Update Failures
 
 - Verify the `GITOPS_PAT` secret has write access
-- Check that the `craftista-gitops` repository exists
+- Check that the `craftista-gitOps` repository exists
 - Ensure the overlay directory structure matches expectations
 
 ### Docker Push Failures
@@ -253,7 +253,7 @@ docker build -t craftista-recommendation:local ./recommendation
 
 1. Configure all required secrets in GitHub repository settings
 2. Set up SonarQube server and create project tokens
-3. Create the `craftista-gitops` repository with proper structure
+3. Create the `craftista-gitOps` repository with proper structure
 4. Test workflows by pushing changes to a feature branch
 5. Monitor the first deployment to ensure everything works correctly
 
