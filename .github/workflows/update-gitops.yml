@@ -39,7 +39,9 @@ on:
         required: false
 
 env:
-  GITOPS_REPO: 8060633493/craftista-gitOps
+  # Default GitOps repo lives alongside this repo under the same owner.
+  # Can be overridden via the optional `GITOPS_REPO_URL` secret.
+  GITOPS_REPO: ${{ github.repository_owner }}/craftista-gitOps
   GITOPS_BRANCH: main
 
 jobs:
@@ -72,6 +74,27 @@ jobs:
       - name: Precheck Vault configuration
         id: precheck
         run: |
+          # Determine GitOps repo to use.
+          # Allow override via secrets.GITOPS_REPO_URL (supports owner/repo, https URL, or git@github.com:owner/repo.git).
+          REPO_INPUT="${{ secrets.GITOPS_REPO_URL }}"
+          if [[ -n "$REPO_INPUT" ]]; then
+            if [[ "$REPO_INPUT" == git@github.com:* ]]; then
+              # git@github.com:owner/repo(.git)
+              REPO_PARSED="${REPO_INPUT#git@github.com:}"
+              REPO_PARSED="${REPO_PARSED%.git}"
+            elif [[ "$REPO_INPUT" == https://github.com/* ]]; then
+              # https://github.com/owner/repo(.git)
+              REPO_PARSED="${REPO_INPUT#https://github.com/}"
+              REPO_PARSED="${REPO_PARSED%.git}"
+            else
+              # assume owner/repo
+              REPO_PARSED="$REPO_INPUT"
+            fi
+            echo "gitops_repo=$REPO_PARSED" >> "$GITHUB_OUTPUT"
+          else
+            echo "gitops_repo=${{ env.GITOPS_REPO }}" >> "$GITHUB_OUTPUT"
+          fi
+
           if [[ -z "${{ secrets.VAULT_ADDR }}" ]] || [[ -z "${{ secrets.VAULT_TOKEN }}" ]]; then
             echo "⚠️ VAULT_ADDR/VAULT_TOKEN not configured in repo secrets; skipping GitOps update."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -139,7 +162,7 @@ jobs:
         uses: actions/checkout@v4
         if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'ssh'
         with:
-          repository: ${{ env.GITOPS_REPO }}
+          repository: ${{ steps.precheck.outputs.gitops_repo }}
           ref: ${{ env.GITOPS_BRANCH }}
           ssh-key: ${{ steps.vault-auth.outputs.gitops-ssh-key }}
           path: gitops
@@ -149,7 +172,7 @@ jobs:
         uses: actions/checkout@v4
         if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'pat'
         with:
-          repository: ${{ env.GITOPS_REPO }}
+          repository: ${{ steps.precheck.outputs.gitops_repo }}
           ref: ${{ env.GITOPS_BRANCH }}
           token: ${{ steps.vault-auth.outputs.gitops-token }}
           path: gitops
