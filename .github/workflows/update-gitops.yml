@@ -30,10 +30,10 @@ on:
     secrets:
       VAULT_ADDR:
         description: "HashiCorp Vault server address"
-        required: true
+        required: false
       VAULT_TOKEN:
         description: "HashiCorp Vault authentication token"
-        required: true
+        required: false
       GITOPS_REPO_URL:
         description: "GitOps repository URL"
         required: false
@@ -69,7 +69,18 @@ jobs:
           echo "Environment: ${{ inputs.environment }}"
           echo "Image Tag: ${{ inputs.image-tag }}"
 
+      - name: Precheck Vault configuration
+        id: precheck
+        run: |
+          if [[ -z "${{ secrets.VAULT_ADDR }}" ]] || [[ -z "${{ secrets.VAULT_TOKEN }}" ]]; then
+            echo "⚠️ VAULT_ADDR/VAULT_TOKEN not configured in repo secrets; skipping GitOps update."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Vault CLI
+        if: steps.precheck.outputs.skip != 'true'
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
@@ -77,6 +88,7 @@ jobs:
 
       - name: Authenticate with Vault and get GitOps deploy key
         id: vault-auth
+        if: steps.precheck.outputs.skip != 'true'
         run: |
           # Set Vault address
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
@@ -125,7 +137,7 @@ jobs:
 
       - name: Checkout GitOps repository (SSH)
         uses: actions/checkout@v4
-        if: steps.vault-auth.outputs.gitops-auth-method == 'ssh'
+        if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'ssh'
         with:
           repository: ${{ env.GITOPS_REPO }}
           ref: ${{ env.GITOPS_BRANCH }}
@@ -135,7 +147,7 @@ jobs:
 
       - name: Checkout GitOps repository (PAT)
         uses: actions/checkout@v4
-        if: steps.vault-auth.outputs.gitops-auth-method == 'pat'
+        if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'pat'
         with:
           repository: ${{ env.GITOPS_REPO }}
           ref: ${{ env.GITOPS_BRANCH }}
@@ -144,6 +156,7 @@ jobs:
           fetch-depth: 0
 
       - name: Configure Git
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           git config user.name "GitHub Actions Bot"
@@ -155,6 +168,7 @@ jobs:
 
       - name: Update Kubernetes overlay manifests
         id: update-k8s
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -209,6 +223,7 @@ jobs:
 
       - name: Update Helm values files
         id: update-helm
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -248,6 +263,7 @@ jobs:
           fi
 
       - name: Verify changes
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           echo "=== Git Status ==="
@@ -268,6 +284,7 @@ jobs:
 
       - name: Commit and push changes
         id: commit
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -342,7 +359,7 @@ jobs:
           fi
 
       - name: Handle merge conflicts and notifications
-        if: failure()
+        if: steps.precheck.outputs.skip != 'true' && failure()
         run: |
           SERVICE="${{ inputs.service-name }}"
           ENV="${{ inputs.environment }}"
@@ -380,7 +397,7 @@ jobs:
           cat /tmp/failure-summary.md
 
       - name: Create success notification
-        if: success() && steps.commit.outputs.committed == 'true'
+        if: steps.precheck.outputs.skip != 'true' && success() && steps.commit.outputs.committed == 'true'
         run: |
           SERVICE="${{ inputs.service-name }}"
           ENV="${{ inputs.environment }}"
