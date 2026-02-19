@@ -82,10 +82,17 @@ jobs:
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
           export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
-          # Test Vault connectivity
-          if ! vault auth -method=token; then
-            echo "❌ Failed to authenticate with Vault"
+          if [[ -z "$VAULT_ADDR" ]] || [[ -z "$VAULT_TOKEN" ]]; then
+            echo "❌ VAULT_ADDR or VAULT_TOKEN is not set"
             exit 1
+          fi
+
+          # Test Vault connectivity
+          if ! vault token lookup >/dev/null 2>&1; then
+            if ! vault login -no-print "$VAULT_TOKEN" >/dev/null 2>&1; then
+              echo "❌ Failed to authenticate with Vault"
+              exit 1
+            fi
           fi
 
           echo "✅ Successfully authenticated with Vault"
@@ -98,6 +105,7 @@ jobs:
             # Try to get PAT as fallback
             GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
             if [[ -n "$GITOPS_PAT" ]]; then
+              echo "::add-mask::$GITOPS_PAT"
               echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
               echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
             else
@@ -106,30 +114,32 @@ jobs:
             fi
           else
             echo "✅ Retrieved GitOps deploy key from Vault"
-            echo "gitops-auth-method=ssh" >> $GITHUB_OUTPUT
-            
-            # Save deploy key to file
-            mkdir -p ~/.ssh
-            echo "$DEPLOY_KEY" > ~/.ssh/gitops_deploy_key
-            chmod 600 ~/.ssh/gitops_deploy_key
-            
-            # Configure SSH
-            cat >> ~/.ssh/config <<EOF
-          Host github.com
-            HostName github.com
-            User git
-            IdentityFile ~/.ssh/gitops_deploy_key
-            StrictHostKeyChecking no
-          EOF
+            echo "::add-mask::$DEPLOY_KEY"
+            {
+              echo "gitops-auth-method=ssh"
+              echo "gitops-ssh-key<<EOF"
+              echo "$DEPLOY_KEY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout GitOps repository
+      - name: Checkout GitOps repository (SSH)
         uses: actions/checkout@v4
+        if: steps.vault-auth.outputs.gitops-auth-method == 'ssh'
         with:
           repository: ${{ env.GITOPS_REPO }}
           ref: ${{ env.GITOPS_BRANCH }}
-          token: ${{ steps.vault-auth.outputs.gitops-auth-method == 'pat' && steps.vault-auth.outputs.gitops-token || '' }}
-          ssh-key: ${{ steps.vault-auth.outputs.gitops-auth-method == 'ssh' && '~/.ssh/gitops_deploy_key' || '' }}
+          ssh-key: ${{ steps.vault-auth.outputs.gitops-ssh-key }}
+          path: gitops
+          fetch-depth: 0
+
+      - name: Checkout GitOps repository (PAT)
+        uses: actions/checkout@v4
+        if: steps.vault-auth.outputs.gitops-auth-method == 'pat'
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ steps.vault-auth.outputs.gitops-token }}
           path: gitops
           fetch-depth: 0
 

@@ -54,7 +54,9 @@ jobs:
                   export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
                   # Authenticate with Vault
-                  vault auth -method=token
+                  if ! vault token lookup >/dev/null 2>&1; then
+                    vault login -no-print "$VAULT_TOKEN" >/dev/null
+                  fi
 
                   # Get kubeconfig for the environment
                   KUBECONFIG_PATH="secret/kubernetes/${{ inputs.environment }}/kubeconfig"
