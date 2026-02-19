@@ -71,7 +71,7 @@ describe('App', () => {
             chai.request(server)
                 .get("/")
                 .end((err, response) => {
-                    response.text.should.include("School of Devops");
+                    response.text.should.include("School of DevOps");
                     done();
                 });
         });

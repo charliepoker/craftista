@@ -16,6 +16,7 @@
     "test:integration": "mocha test/integration/*.js",
     "test:performance": "mocha test/performance/*.js --timeout 60000",
     "test:coverage": "nyc --reporter=lcov --reporter=text --report-dir=./coverage mocha 'test/**/*.js'",
+    "test:coverage:ci": "nyc --reporter=lcov --reporter=text --report-dir=./coverage mocha 'test/**/*.js' --exclude 'test/performance/**'",
     "lint": "eslint ."
   },
   "devDependencies": {

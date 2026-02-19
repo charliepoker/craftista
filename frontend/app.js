@@ -16,12 +16,10 @@ app.use('/api/origamis', origamisRouter);
 // Static Middleware
 app.use('/static', express.static('public'));
 
-
-
 // Endpoint to serve product data to client
 app.get('/api/products', async (req, res) => {
   try {
-    let response = await axios.get(`${productsApiBaseUri}/api/products`);
+    const response = await axios.get(`${productsApiBaseUri}/api/products`);
     res.json(response.data);
   } catch (error) {
     console.error('Error fetching products:', error);
@@ -35,12 +33,11 @@ app.get('/', (req, res) => {
     hostname: os.hostname(),
     ipAddress: getIPAddress(),
     isContainer: isContainer(),
-    isKubernetes: fs.existsSync('/var/run/secrets/kubernetes.io')
-    // ... any additional system info here
+    isKubernetes: fs.existsSync('/var/run/secrets/kubernetes.io'),
   };
 
   res.render('index', {
-    systemInfo: systemInfo,
+    systemInfo,
     app_version: config.version, // provide version to the view
   });
 });
@@ -56,7 +53,7 @@ function isContainer() {
   try {
     fs.readFileSync('/proc/1/cgroup');
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }
@@ -64,66 +61,57 @@ function isContainer() {
 app.get('/api/service-status', async (req, res) => {
   try {
     // Example of checking the status of the products service
-    const productServiceResponse = await axios.get(`${productsApiBaseUri}/api/products`);
-    
-    // Additional checks for more services can be added similarly
+    await axios.get(`${productsApiBaseUri}/api/products`);
 
     // If code execution reaches here, the service(s) are up
-    res.json({
-      Catalogue: 'up',
-      // otherService: 'up' or 'down'
-    });
+    res.json({ Catalogue: 'up' });
   } catch (error) {
     console.error('Error:', error);
-    res.json({
-      Catalogue: 'down',
-      // otherService: 'up' or 'down'
-    });
+    res.json({ Catalogue: 'down' });
   }
 });
 
-app.get('/recommendation-status', (req, res) => {
-    axios.get(config.recommendationBaseUri + '/api/recommendation-status')
-        .then(response => {
-            res.json({status: "up", message: "Recommendation Service is Online"});
-        })
-        .catch(error => {
-            res.json({status: "down", message: "Recommendation Service is Offline"});
-        });
+app.get('/recommendation-status', async (req, res) => {
+  try {
+    await axios.get(`${recommendationBaseUri}/api/recommendation-status`);
+    res.json({ status: 'up', message: 'Recommendation Service is Online' });
+  } catch {
+    res.json({ status: 'down', message: 'Recommendation Service is Offline' });
+  }
 });
 
-app.get('/votingservice-status', (req, res) => {
-    axios.get(config.votingBaseUri + '/api/origamis')
-        .then(response => {
-            res.json({status: "up", message: "Voting Service is Online"});
-        })
-        .catch(error => {
-            res.json({status: "down", message: "Voting Service is Offline"});
-        });
+app.get('/votingservice-status', async (req, res) => {
+  try {
+    await axios.get(`${votingBaseUri}/api/origamis`);
+    res.json({ status: 'up', message: 'Voting Service is Online' });
+  } catch {
+    res.json({ status: 'down', message: 'Voting Service is Offline' });
+  }
 });
-
 
 app.get('/daily-origami', (req, res) => {
-    axios.get(config.recommendationBaseUri + '/api/origami-of-the-day')
-        .then(response => {
-            res.json(response.data);
-        })
-        .catch(error => {
-            res.status(500).send("Error while fetching daily origami");
-        });
+  axios
+    .get(`${recommendationBaseUri}/api/origami-of-the-day`)
+    .then((response) => {
+      res.json(response.data);
+    })
+    .catch(() => {
+      res.status(500).send('Error while fetching daily origami');
+    });
 });
 
-
 // Handle 404
-app.use((req, res, next) => {
-    res.status(404).send('ERROR 404 - Not Found on This Server');
+app.use((req, res) => {
+  res.status(404).send('ERROR 404 - Not Found on This Server');
 });
 
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
 module.exports = server; // Note that we're exporting the server, not app.
+
+
 
 

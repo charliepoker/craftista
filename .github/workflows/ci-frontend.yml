@@ -47,7 +47,7 @@ jobs:
         run: npm run test:unit
 
       - name: Generate test coverage
-        run: npm run test:coverage
+        run: npm run test:coverage:ci
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -109,7 +109,7 @@ jobs:
 
       - name: Generate coverage
         working-directory: ./frontend
-        run: npm run test:coverage
+        run: npm run test:coverage:ci
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
