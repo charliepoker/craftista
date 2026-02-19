@@ -199,17 +199,44 @@ jobs:
           IMAGE_TAG="${{ inputs.image-tag }}"
           DOCKER_IMAGE="${{ inputs.docker-image }}"
 
-          OVERLAY_PATH="kubernetes/overlays/${ENV}/${SERVICE}"
+          # Your GitOps repo supports multiple overlay roots (e.g. homelab, eks).
+          # Prefer homelab for this project, but auto-detect if the structure differs.
+          CANDIDATES=(
+            "kubernetes/overlays/homelab/${ENV}/${SERVICE}"
+            "kubernetes/overlays/${ENV}/${SERVICE}"
+            "kubernetes/overlays/eks/${ENV}/${SERVICE}"
+          )
+
+          OVERLAY_PATH=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [[ -d "$candidate" ]]; then
+              OVERLAY_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [[ -z "$OVERLAY_PATH" ]]; then
+            mapfile -t MATCHES < <(find kubernetes/overlays -type d -path "*/${ENV}/${SERVICE}" 2>/dev/null | sort || true)
+            if [[ ${#MATCHES[@]} -eq 1 ]]; then
+              OVERLAY_PATH="${MATCHES[0]}"
+            fi
+          fi
+
+          if [[ -z "$OVERLAY_PATH" ]]; then
+            echo "❌ Overlay directory not found for ENV='$ENV' SERVICE='$SERVICE'"
+            echo "Tried:"
+            for candidate in "${CANDIDATES[@]}"; do
+              echo "  - $candidate"
+            done
+            echo "Available overlays:"
+            find kubernetes/overlays -type d -name "$SERVICE" 2>/dev/null | sort || true
+            exit 1
+          fi
+
           KUSTOMIZATION_FILE="${OVERLAY_PATH}/kustomization.yaml"
 
           echo "Updating Kubernetes overlay at: $OVERLAY_PATH"
-
-          if [[ ! -d "$OVERLAY_PATH" ]]; then
-            echo "❌ Overlay directory not found: $OVERLAY_PATH"
-            echo "Available overlays:"
-            find kubernetes/overlays -type d -name "$SERVICE" || true
-            exit 1
-          fi
+          echo "overlay-path=$OVERLAY_PATH" >> "$GITHUB_OUTPUT"
 
           if [[ ! -f "$KUSTOMIZATION_FILE" ]]; then
             echo "❌ Kustomization file not found: $KUSTOMIZATION_FILE"
@@ -440,7 +467,7 @@ jobs:
           echo ""
           echo "Updated files:"
           if [[ "${{ steps.update-k8s.outputs.k8s-updated }}" == "true" ]]; then
-            echo "  ✅ Kubernetes overlay: kubernetes/overlays/$ENV/$SERVICE/kustomization.yaml"
+            echo "  ✅ Kubernetes overlay: ${{ steps.update-k8s.outputs.overlay-path }}/kustomization.yaml"
           fi
           if [[ "${{ steps.update-helm.outputs.helm-updated }}" == "true" ]]; then
             echo "  ✅ Helm values: helm/charts/$SERVICE/values-$ENV.yaml"
