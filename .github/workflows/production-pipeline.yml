@@ -231,8 +231,8 @@ jobs:
           severity: "CRITICAL,HIGH,MEDIUM"
 
       - name: Upload dependency scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('dependency-results.sarif') != ''
         with:
           sarif_file: "dependency-results.sarif"
           category: "dependency-scan-${{ inputs.service_name }}"
@@ -282,7 +282,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=sha,prefix=${{ needs.preflight.outputs.environment }}-
+            type=sha,format=long,prefix=${{ needs.preflight.outputs.environment }}-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ needs.preflight.outputs.version }}
@@ -341,8 +341,8 @@ jobs:
           severity: "CRITICAL,HIGH"
 
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: "trivy-results.sarif"
           category: "container-scan-${{ inputs.service_name }}"
