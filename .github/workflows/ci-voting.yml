@@ -282,7 +282,8 @@ jobs:
 
   update-gitops:
     name: Update GitOps Repository
-    needs: [build-image, container-scan, resolve-image-tag, determine-environment]
+    needs:
+      [build-image, container-scan, resolve-image-tag, determine-environment]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/update-gitops.yml
     with:

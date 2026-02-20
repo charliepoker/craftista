@@ -277,7 +277,7 @@ jobs:
 
             - name: Wait for Redis
               run: |
-                                    timeout 60s bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 2; done'
+                  timeout 60s bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 2; done'
 
             - name: Run unit tests
               run: |
