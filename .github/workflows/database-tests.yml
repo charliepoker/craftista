@@ -249,8 +249,6 @@ jobs:
         services:
             redis:
                 image: redis:7-alpine
-                env:
-                    REDIS_PASSWORD: ${{ env.REDIS_PASSWORD }}
                 ports:
                     - 6379:6379
                 options: >-
@@ -258,7 +256,6 @@ jobs:
                     --health-interval 10s
                     --health-timeout 5s
                     --health-retries 5
-                command: redis-server --requirepass ${{ env.REDIS_PASSWORD }}
 
         defaults:
             run:
@@ -280,14 +277,14 @@ jobs:
 
             - name: Wait for Redis
               run: |
-                  timeout 60s bash -c 'until redis-cli -h localhost -p 6379 -a ${{ env.REDIS_PASSWORD }} ping; do sleep 2; done'
+                                    timeout 60s bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 2; done'
 
             - name: Run unit tests
               run: |
                   go test -v -race -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | tee test_output.txt
                   go-junit-report -in test_output.txt -out junit.xml
               env:
-                  REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/0
+                  REDIS_URL: redis://localhost:6379/0
                   TESTING: true
 
             - name: Run integration tests
@@ -295,14 +292,14 @@ jobs:
                   go test -v -tags=integration -coverprofile=integration_coverage.out -covermode=atomic ./tests/ 2>&1 | tee integration_output.txt
                   go-junit-report -in integration_output.txt -out integration_junit.xml
               env:
-                  REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/0
+                  REDIS_URL: redis://localhost:6379/0
                   TESTING: true
 
             - name: Run performance tests
               run: |
                   go test -v -bench=. -benchmem -run=^$ ./tests/ > benchmark.txt || true
               env:
-                  REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/0
+                  REDIS_URL: redis://localhost:6379/0
                   TESTING: true
 
             - name: Generate coverage report
