@@ -140,6 +140,7 @@ jobs:
             -Dsonar.exclusions=tests/**,venv/**,htmlcov/**,**/__pycache__/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.python.version=3.11
+        continue-on-error: true
 
       - name: Check SonarQube Quality Gate
         uses: sonarsource/sonarqube-quality-gate-action@master

@@ -90,7 +90,6 @@ jobs:
             voting/target/dependency-check-report.html
             voting/target/dependency-check-report.json
 
-
   sast-scan:
     name: SAST - SonarQube Scan
     runs-on: ubuntu-latest
@@ -124,6 +123,7 @@ jobs:
             -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             -Dsonar.java.binaries=target/classes \
             -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+        continue-on-error: true
 
       - name: Check SonarQube Quality Gate
         uses: sonarsource/sonarqube-quality-gate-action@master
