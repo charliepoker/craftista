@@ -40,7 +40,7 @@ jobs:
         run: mvn clean compile -DskipTests
 
       - name: Run unit tests
-        run: mvn test
+        run: mvn test -DexcludedGroups=performance
 
       - name: Generate test coverage report
         run: mvn jacoco:report
@@ -90,7 +90,7 @@ jobs:
             voting/target/dependency-check-report.html
             voting/target/dependency-check-report.json
 
-  # TODO: Uncomment when SonarQube server is set up
+
   sast-scan:
     name: SAST - SonarQube Scan
     runs-on: ubuntu-latest

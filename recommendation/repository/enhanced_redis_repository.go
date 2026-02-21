@@ -10,6 +10,7 @@ import (
 	"recommendation/database"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -31,7 +32,7 @@ type EnhancedRedisRepository struct {
 	origamiOfDayTTL      time.Duration
 	userPreferencesTTL   time.Duration
 	
-	// Performance tracking
+	// Performance tracking (atomic for thread-safety)
 	cacheHits   int64
 	cacheMisses int64
 	errors      int64
@@ -85,18 +86,18 @@ func (r *EnhancedRedisRepository) getOrigamiOfTheDayInternal(ctx context.Context
 	var cachedOrigami data.Origami
 	err := r.getCachedData(cacheKey, &cachedOrigami)
 	if err == nil {
-		r.cacheHits++
+		atomic.AddInt64(&r.cacheHits, 1)
 		log.Printf("Cache hit for origami of the day")
 		return cachedOrigami, nil
 	}
 	
-	r.cacheMisses++
+	atomic.AddInt64(&r.cacheMisses, 1)
 	log.Printf("Cache miss for origami of the day: %v", err)
 	
 	// Generate new origami of the day
 	origami, err := r.generateOrigamiOfTheDay()
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return data.Origami{}, fmt.Errorf("failed to generate origami of the day: %w", err)
 	}
 	
@@ -123,18 +124,18 @@ func (r *EnhancedRedisRepository) GetRecommendations(userID string, limit int) (
 	var cachedRecommendations []data.Origami
 	err := r.getCachedData(cacheKey, &cachedRecommendations)
 	if err == nil && len(cachedRecommendations) > 0 {
-		r.cacheHits++
+		atomic.AddInt64(&r.cacheHits, 1)
 		log.Printf("Cache hit for user %s recommendations", userID)
 		return cachedRecommendations, nil
 	}
 	
-	r.cacheMisses++
+	atomic.AddInt64(&r.cacheMisses, 1)
 	log.Printf("Cache miss for user %s recommendations", userID)
 	
 	// Generate new recommendations
 	recommendations, err := r.generateRecommendations(userID, limit)
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return nil, &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to generate recommendations",
@@ -167,16 +168,16 @@ func (r *EnhancedRedisRepository) GetPersonalizedRecommendations(userID string, 
 	var cachedRecommendations []data.Origami
 	err := r.getCachedData(cacheKey, &cachedRecommendations)
 	if err == nil && len(cachedRecommendations) > 0 {
-		r.cacheHits++
+		atomic.AddInt64(&r.cacheHits, 1)
 		return cachedRecommendations, nil
 	}
 	
-	r.cacheMisses++
+	atomic.AddInt64(&r.cacheMisses, 1)
 	
 	// Generate personalized recommendations
 	recommendations, err := r.generatePersonalizedRecommendations(userID, preferences, limit)
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return nil, &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to generate personalized recommendations",
@@ -219,7 +220,7 @@ func (r *EnhancedRedisRepository) UpdateRecommendationScore(origamiName string, 
 	}).Err()
 	
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to update recommendation score",
@@ -251,11 +252,11 @@ func (r *EnhancedRedisRepository) GetTopRatedOrigamis(limit int) ([]string, erro
 	var cachedTopRated []string
 	err := r.getCachedData(cacheKey, &cachedTopRated)
 	if err == nil && len(cachedTopRated) > 0 {
-		r.cacheHits++
+		atomic.AddInt64(&r.cacheHits, 1)
 		return cachedTopRated, nil
 	}
 	
-	r.cacheMisses++
+	atomic.AddInt64(&r.cacheMisses, 1)
 	
 	// Get from sorted set
 	scoreKey := "origami:scores"
@@ -264,7 +265,7 @@ func (r *EnhancedRedisRepository) GetTopRatedOrigamis(limit int) ([]string, erro
 	
 	topRated, err := r.client.ZRevRange(ctx, scoreKey, 0, int64(limit-1)).Result()
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return nil, &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to get top rated origamis",
@@ -294,7 +295,7 @@ func (r *EnhancedRedisRepository) GetRecommendationsByScore(minScore float64, li
 	}).Result()
 	
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return nil, &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to get recommendations by score",
@@ -414,17 +415,17 @@ func (r *EnhancedRedisRepository) GetCacheStats() (map[string]interface{}, error
 	poolStats := r.client.PoolStats()
 	
 	// Calculate hit rate
-	totalRequests := r.cacheHits + r.cacheMisses
+	totalRequests := atomic.LoadInt64(&r.cacheHits) + atomic.LoadInt64(&r.cacheMisses)
 	hitRate := float64(0)
 	if totalRequests > 0 {
-		hitRate = float64(r.cacheHits) / float64(totalRequests) * 100
+		hitRate = float64(atomic.LoadInt64(&r.cacheHits)) / float64(totalRequests) * 100
 	}
 	
 	stats := map[string]interface{}{
-		"cache_hits":     r.cacheHits,
-		"cache_misses":   r.cacheMisses,
+		"cache_hits":     atomic.LoadInt64(&r.cacheHits),
+		"cache_misses":   atomic.LoadInt64(&r.cacheMisses),
 		"hit_rate":       hitRate,
-		"errors":         r.errors,
+		"errors":         atomic.LoadInt64(&r.errors),
 		"pool_stats": map[string]interface{}{
 			"hits":        poolStats.Hits,
 			"misses":      poolStats.Misses,
@@ -468,10 +469,10 @@ func (r *EnhancedRedisRepository) GetRecommendationMetrics() (RecommendationMetr
 	}
 	
 	// Calculate hit rate
-	totalRequests := r.cacheHits + r.cacheMisses
+	totalRequests := atomic.LoadInt64(&r.cacheHits) + atomic.LoadInt64(&r.cacheMisses)
 	hitRate := float64(0)
 	if totalRequests > 0 {
-		hitRate = float64(r.cacheHits) / float64(totalRequests)
+		hitRate = float64(atomic.LoadInt64(&r.cacheHits)) / float64(totalRequests)
 	}
 	
 	return RecommendationMetrics{
@@ -482,7 +483,7 @@ func (r *EnhancedRedisRepository) GetRecommendationMetrics() (RecommendationMetr
 		UserEngagement: UserEngagementSummary{
 			ActiveUsers:         0, // Would need user tracking
 			AvgSessionTime:      0,
-			RecommendationViews: r.cacheHits + r.cacheMisses,
+			RecommendationViews: atomic.LoadInt64(&r.cacheHits) + atomic.LoadInt64(&r.cacheMisses),
 		},
 		Timestamp: time.Now(),
 	}, nil
@@ -572,7 +573,7 @@ func (r *EnhancedRedisRepository) BatchUpdateScores(scores map[string]float64) e
 	
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		r.errors++
+		atomic.AddInt64(&r.errors, 1)
 		return &RecommendationError{
 			Code:    ErrCodeInternalError,
 			Message: "Failed to batch update scores",
@@ -623,18 +624,18 @@ func (r *EnhancedRedisRepository) HealthCheck() RepositoryHealthStatus {
 	status.Status = "healthy"
 	
 	// Calculate error rate
-	totalRequests := r.cacheHits + r.cacheMisses + r.errors
+	totalRequests := atomic.LoadInt64(&r.cacheHits) + atomic.LoadInt64(&r.cacheMisses) + atomic.LoadInt64(&r.errors)
 	errorRate := float64(0)
 	if totalRequests > 0 {
-		errorRate = float64(r.errors) / float64(totalRequests)
+		errorRate = float64(atomic.LoadInt64(&r.errors)) / float64(totalRequests)
 	}
 	status.ErrorRate = errorRate
 	
 	// Add performance details
 	status.Details = map[string]interface{}{
-		"cache_hits":   r.cacheHits,
-		"cache_misses": r.cacheMisses,
-		"errors":       r.errors,
+		"cache_hits":   atomic.LoadInt64(&r.cacheHits),
+		"cache_misses": atomic.LoadInt64(&r.cacheMisses),
+		"errors":       atomic.LoadInt64(&r.errors),
 		"error_rate":   errorRate,
 	}
 	
@@ -716,8 +717,8 @@ func (r *EnhancedRedisRepository) generateOrigamiOfTheDay() (data.Origami, error
 		seed += int64(char)
 	}
 	
-	rand.Seed(seed)
-	selectedOrigami := origamis[rand.Intn(len(origamis))]
+	rng := rand.New(rand.NewSource(seed))
+	selectedOrigami := origamis[rng.Intn(len(origamis))]
 	
 	return selectedOrigami, nil
 }
@@ -734,14 +735,14 @@ func (r *EnhancedRedisRepository) generateRecommendations(userID string, limit i
 		seed += int64(char)
 	}
 	
-	rand.Seed(seed + time.Now().Unix())
+	rng := rand.New(rand.NewSource(seed + time.Now().UnixNano()))
 	
 	// Shuffle the origamis
 	shuffled := make([]data.Origami, len(allOrigamis))
 	copy(shuffled, allOrigamis)
 	
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
+		j := rng.Intn(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 	
@@ -812,7 +813,8 @@ func (r *EnhancedRedisRepository) calculatePersonalizationScore(origami data.Ori
 	}
 	
 	// Add some randomness to avoid always returning the same results
-	score += rand.Float64() * 0.5
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	score += rng.Float64() * 0.5
 	
 	return score
 }
