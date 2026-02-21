@@ -32,7 +32,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.19"
+          go-version: "1.22"
           cache-dependency-path: recommendation/go.sum
 
       - name: Download dependencies
@@ -76,10 +76,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.19"
+          go-version: "1.22"
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        continue-on-error: true
 
       - name: Run govulncheck
         run: |
@@ -92,7 +93,7 @@ jobs:
 
       - name: Check for known vulnerabilities in dependencies
         run: |
-          go list -json -m all | go run golang.org/x/vuln/cmd/govulncheck@latest -mode=binary -json ./... > vuln-report.json || true
+          govulncheck -json ./... > vuln-report.json || true
         continue-on-error: true
 
       - name: Upload scan results
@@ -122,7 +123,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.19"
+          go-version: "1.22"
           cache-dependency-path: recommendation/go.sum
 
       - name: Download dependencies
