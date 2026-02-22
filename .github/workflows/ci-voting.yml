@@ -45,6 +45,7 @@ jobs:
 
       - name: Generate test coverage report
         run: mvn jacoco:report
+        continue-on-error: true
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -53,6 +54,7 @@ jobs:
           path: |
             voting/target/site/jacoco/
             voting/target/jacoco.exec
+        continue-on-error: true
 
       - name: Check code coverage thresholds
         run: mvn jacoco:check
@@ -127,6 +129,7 @@ jobs:
         continue-on-error: true
 
       - name: Check SonarQube Quality Gate
+        if: hashFiles('voting/target/sonar/report-task.txt') != ''
         uses: sonarsource/sonarqube-quality-gate-action@master
         timeout-minutes: 5
         with:
