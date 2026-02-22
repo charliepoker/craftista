@@ -25,15 +25,10 @@ RUN python -m unittest test_app.py
 # Stage 2: Runtime stage
 FROM python:3.11-slim
 
-# Install runtime dependencies for database clients and MongoDB shell
+# Install runtime dependencies for database clients
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    postgresql-client \
-    gnupg \
-    && curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg \
-    && echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] http://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list \
-    && apt-get update && apt-get install -y mongodb-mongosh \
-    && rm -rf /var/lib/apt/lists/* /usr/share/keyrings/mongodb-server-7.0.gpg
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user and group
 RUN groupadd -r appuser && useradd -r -g appuser appuser
