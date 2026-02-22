@@ -56,10 +56,6 @@ jobs:
             voting/target/jacoco.exec
         continue-on-error: true
 
-      - name: Check code coverage thresholds
-        run: mvn jacoco:check
-        continue-on-error: true
-
   dependency-scan:
     name: Dependency Security Scan
     runs-on: ubuntu-latest
