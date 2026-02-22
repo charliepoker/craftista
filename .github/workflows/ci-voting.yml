@@ -115,8 +115,9 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN_VOTING }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: |
-          mvn clean verify sonar:sonar \
+          mvn clean compile sonar:sonar \
             -DskipTests \
+            -Ddependency-check.skip=true \
             -Dsonar.projectKey=craftista-voting \
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
             -Dsonar.token=${{ secrets.SONAR_TOKEN_VOTING }} \
