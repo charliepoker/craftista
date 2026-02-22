@@ -10,6 +10,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.EntityManager;
@@ -38,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
     "spring.datasource.url=jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH",
-    "spring.jpa.database-platform=org.hibernate.dialect.PostgreSQL10Dialect",
+    "spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
     "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 @Transactional
@@ -56,6 +57,11 @@ class OrigamiRepositoryPostgreSQLCompatibilityTest {
 
     @BeforeEach
     void setUp() {
+        // Clean up any previously committed data from concurrent tests
+        origamiRepository.deleteAllInBatch();
+        entityManager.flush();
+        entityManager.clear();
+
         // Create test data
         testOrigami1 = Origami.builder()
                 .origamiId("postgres-compat-crane-001")
@@ -229,9 +235,9 @@ class OrigamiRepositoryPostgreSQLCompatibilityTest {
         );
         
         // Both operations should be visible within the same transaction
-        entityManager.refresh(testOrigami1);
-        assertThat(testOrigami1.getVoteCount()).isEqualTo(initialVoteCount + 1);
-        assertThat(testOrigami1.getName()).isEqualTo("Updated in PostgreSQL Transaction Test");
+        Origami freshOrigami = origamiRepository.findByOrigamiId(origamiId).orElseThrow();
+        assertThat(freshOrigami.getVoteCount()).isEqualTo(initialVoteCount + 1);
+        assertThat(freshOrigami.getName()).isEqualTo("Updated in PostgreSQL Transaction Test");
     }
 
     @Test
@@ -242,6 +248,10 @@ class OrigamiRepositoryPostgreSQLCompatibilityTest {
         int initialVoteCount = testOrigami1.getVoteCount();
         int numberOfThreads = 5;
         int incrementsPerThread = 3;
+
+        // Commit setup data so it is visible to concurrent threads
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
 
         ExecutorService executor = Executors.newFixedThreadPool(numberOfThreads);
 
@@ -268,10 +278,14 @@ class OrigamiRepositoryPostgreSQLCompatibilityTest {
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
 
+        // Start new transaction for verification
+        TestTransaction.start();
+
         // Verify final vote count
-        entityManager.refresh(testOrigami1);
+        Optional<Origami> result = origamiRepository.findByOrigamiId(origamiId);
+        assertThat(result).isPresent();
         int expectedTotalIncrements = numberOfThreads * incrementsPerThread;
-        assertThat(testOrigami1.getVoteCount()).isEqualTo(initialVoteCount + expectedTotalIncrements);
+        assertThat(result.get().getVoteCount()).isEqualTo(initialVoteCount + expectedTotalIncrements);
     }
 
     @Nested

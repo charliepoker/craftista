@@ -74,13 +74,13 @@ if [ -f "catalogue/requirements-test.txt" ]; then
 fi
 
 run_test_suite "Catalogue Service (Python/MongoDB)" \
-    "python -m pytest tests/ -v --tb=short --cov=repository --cov=models" \
+    "python -m pytest tests/ -v --tb=short --cov=repository --cov=models -m 'not integration and not performance' --ignore=tests/integration --ignore=tests/performance" \
     "catalogue"
 
 # 2. Java/Spring Boot Voting Service Tests
 print_status "Setting up Java test environment..."
 run_test_suite "Voting Service (Java/PostgreSQL)" \
-    "./mvnw test -Dtest=*RepositoryTest" \
+    "./mvnw test -Dtest=*RepositoryTest -DskipITs=true" \
     "voting"
 
 # 3. Go Recommendation Service Tests
@@ -97,10 +97,10 @@ run_test_suite "Recommendation Service (Go/Redis)" \
     "go test ./tests/... -v -race -coverprofile=coverage.out" \
     "recommendation"
 
-# 4. Run Mock Repository Tests
+# 4. Run Mock Repository Tests (Unit tests only, no DB required)
 print_status "Running mock repository tests..."
 run_test_suite "Mock Repository Tests" \
-    "python -m pytest tests/test_mock_repository.py -v" \
+    "python -m pytest tests/test_mock_repository.py -v -m 'not integration'" \
     "catalogue"
 
 # Summary

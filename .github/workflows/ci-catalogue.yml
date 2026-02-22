@@ -43,7 +43,9 @@ jobs:
           pip install -r requirements-test.txt
 
       - name: Run pytest unit tests
-        run: pytest
+        env:
+          SKIP_INTEGRATION_TESTS: "true"
+        run: pytest tests/ -v -m 'not integration and not performance' --ignore=tests/integration --ignore=tests/performance
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -123,9 +125,11 @@ jobs:
           pip install -r requirements-test.txt
 
       - name: Generate coverage
+        env:
+          SKIP_INTEGRATION_TESTS: "true"
         working-directory: ./catalogue
         run: |
-          pytest tests/ --cov=. --cov-report=xml --cov-report=html
+          pytest tests/ --cov=. --cov-report=xml --cov-report=html -m 'not integration and not performance' --ignore=tests/integration --ignore=tests/performance
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master

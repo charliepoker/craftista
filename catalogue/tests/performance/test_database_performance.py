@@ -6,6 +6,7 @@ to ensure the database can handle expected load and identify performance bottlen
 """
 
 import pytest
+import pytest_asyncio
 import asyncio
 import time
 import statistics
@@ -39,7 +40,7 @@ class TestDatabasePerformance:
         except Exception as e:
             pytest.skip(f"Failed to start MongoDB container: {e}")
 
-    @pytest.fixture(scope="class")
+    @pytest_asyncio.fixture
     async def mongodb_client(self, mongodb_container):
         """Create MongoDB client for performance testing."""
         connection_url = mongodb_container.get_connection_url()
@@ -47,7 +48,7 @@ class TestDatabasePerformance:
         yield client
         client.close()
 
-    @pytest.fixture(scope="class")
+    @pytest_asyncio.fixture
     async def test_database(self, mongodb_client):
         """Create test database for performance testing."""
         db_name = "perf_test_catalogue_db"
@@ -55,14 +56,14 @@ class TestDatabasePerformance:
         yield database
         await mongodb_client.drop_database(db_name)
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def repository(self, test_database):
         """Create repository instance for performance testing."""
         repo = MongoDBProductRepository(test_database)
         yield repo
         await test_database.products.delete_many({})
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def large_dataset(self, repository):
         """Create a large dataset for performance testing."""
         products = []
