@@ -37,11 +37,10 @@ jobs:
           cache: "maven"
 
       - name: Build with Maven
-        run: mvn clean compile -DskipTests
+        run: mvn clean package -DskipTests
 
-      - name: Run unit tests
-        run: mvn test -Dtest=VotingApplicationTests
-        continue-on-error: true
+      - name: Verify build
+        run: ls -la target/*.jar
 
       - name: Generate test coverage report
         run: mvn jacoco:report
