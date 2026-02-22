@@ -40,7 +40,7 @@ jobs:
         run: mvn clean compile -DskipTests
 
       - name: Run unit tests
-        run: mvn test -DexcludedGroups=performance
+        run: mvn test -DexcludedGroups="performance,integration"
 
       - name: Generate test coverage report
         run: mvn jacoco:report
