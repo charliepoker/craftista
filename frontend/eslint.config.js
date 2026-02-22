@@ -1,22 +1,22 @@
 // eslint.config.js
-const globals = require('globals');
+const globals = require("globals");
 
 module.exports = [
   {
     ignores: [
-      '**/node_modules/**',
-      '**/.nyc_output/**',
-      '**/build/**',
-      '**/dist/**',
-      '**/coverage/**',
-      '**/test/**',
+      "**/node_modules/**",
+      "**/.nyc_output/**",
+      "**/build/**",
+      "**/dist/**",
+      "**/coverage/**",
+      "**/test/**",
     ],
   },
   {
-    files: ['**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx'],
+    files: ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: 'module',
+      sourceType: "module",
       globals: {
         ...globals.browser,
         ...globals.node,
@@ -24,12 +24,12 @@ module.exports = [
       },
     },
     rules: {
-      semi: ['error', 'always'],
-      quotes: ['error', 'single'],
-      indent: ['error', 2],
-      'comma-dangle': ['error', 'always-multiline'],
-      'no-unused-vars': 'warn',
-      'no-console': 'warn',
+      semi: ["error", "always"],
+      quotes: ["error", "single"],
+      indent: ["error", 2],
+      "comma-dangle": ["error", "always-multiline"],
+      "no-unused-vars": "warn",
+      "no-console": "off", // Allow console for server-side logging
     },
   },
 ];
