@@ -5,6 +5,7 @@ How to build the Voting App
 - Port : 8080
 - Runtime : openjdk ( tested with jdk 19)
 - Launch Command: java -jar app.jar
+- Version: 1.0.0-optimized
 
 ---
 
