@@ -67,6 +67,12 @@ wait_for_database() {
 
 # Wait for catalogue service
 wait_for_catalogue() {
+    # Skip catalogue wait for faster startup - service will retry on its own
+    if [ "${SKIP_CATALOGUE_WAIT:-true}" = "true" ]; then
+        echo "Skipping Catalogue service wait (will retry on first request)"
+        return 0
+    fi
+    
     if [ ! -z "$CATALOGUE_SERVICE_URL" ]; then
         echo "Waiting for Catalogue service to be available..."
         
@@ -113,8 +119,11 @@ wait_for_catalogue
 
 echo "Starting Spring Boot application..."
 
+# JVM optimizations for faster startup
+JAVA_OPTS="${JAVA_OPTS:--XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -noverify}"
+
 # Start the main application
-java -jar voting.jar &
+java $JAVA_OPTS -jar voting.jar &
 MAIN_PID=$!
 
 # Wait for the main process
