@@ -1,10 +1,5 @@
 # Voting Service Configuration
 
-# Spring Boot Optimizations
-spring:
-  main:
-    lazy-initialization: true  # Enable lazy bean initialization for faster startup
-  
 # Catalogue Service Integration
 catalogue:
   service-url: ${CATALOGUE_SERVICE_URL:http://catalogue:5000/api/products}
@@ -12,6 +7,10 @@ catalogue:
 
 # Database Configuration
 spring:
+  # Spring Boot Optimizations
+  main:
+    lazy-initialization: true  # Enable lazy bean initialization for faster startup
+  
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:development}
 
