@@ -252,8 +252,12 @@ jobs:
             
             # Check if our image already exists
             if grep -q "name: $DOCKER_IMAGE" "$KUSTOMIZATION_FILE"; then
-              # Update existing image tag
-              sed -i "/name: $DOCKER_IMAGE/,/newTag:/ s/newTag:.*/newTag: $IMAGE_TAG/" "$KUSTOMIZATION_FILE"
+              # Update existing image tag using awk for safer multi-line editing
+              awk -v img="$DOCKER_IMAGE" -v tag="$IMAGE_TAG" '
+                /name:/ && $0 ~ img { found=1 }
+                found && /newTag:/ { print "    newTag: " tag; found=0; next }
+                { print }
+              ' "$KUSTOMIZATION_FILE" > "$KUSTOMIZATION_FILE.tmp" && mv "$KUSTOMIZATION_FILE.tmp" "$KUSTOMIZATION_FILE"
             else
               # Add new image entry
               sed -i "/images:/a\\  - name: $DOCKER_IMAGE\\n    newTag: $IMAGE_TAG" "$KUSTOMIZATION_FILE"
