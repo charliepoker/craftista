@@ -3,7 +3,7 @@ const axios = require("axios");
 const router = express.Router();
 
 // Voting Service base URL
-const VOTING_SERVICE_BASE_URL = "http://craftista-voting:8080";
+const VOTING_SERVICE_BASE_URL = process.env.VOTING_BASE_URI || "http://craftista-voting:8080";
 
 // Vote for an Origami
 router.post("/:origamiId/vote", async (req, res) => {
@@ -33,7 +33,7 @@ router.get("/:origamiId/votes", async (req, res) => {
     if (process.env.NODE_ENV !== "production") {
       console.error("Error fetching vote count:", error);
     }
-    res.status(200).send("Internal Server Error");
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 

@@ -5,7 +5,6 @@ catalogue:
   service-url: ${CATALOGUE_SERVICE_URL:http://catalogue:5000/api/products}
   sync-interval: ${CATALOGUE_SYNC_INTERVAL:60000} # 1 minute in milliseconds
 
-# Database Configuration
 spring:
   # Spring Boot Optimizations
   main:
