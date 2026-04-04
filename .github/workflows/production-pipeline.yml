@@ -91,14 +91,6 @@ jobs:
           BRANCH="${{ github.ref_name }}"
 
           case "$BRANCH" in
-            main|master)
-              echo "environment=prod" >> $GITHUB_OUTPUT
-              echo "should-deploy=true" >> $GITHUB_OUTPUT
-              ;;
-            staging)
-              echo "environment=staging" >> $GITHUB_OUTPUT
-              echo "should-deploy=true" >> $GITHUB_OUTPUT
-              ;;
             develop|dev)
               echo "environment=dev" >> $GITHUB_OUTPUT
               echo "should-deploy=true" >> $GITHUB_OUTPUT
@@ -280,13 +272,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,format=long,prefix=${{ needs.preflight.outputs.environment }}-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=${{ needs.preflight.outputs.version }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,format=short
 
       - name: Build and push
         id: build
@@ -311,7 +297,7 @@ jobs:
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
           format: spdx-json
           output-file: sbom-${{ inputs.service_name }}.spdx.json
 
@@ -335,7 +321,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
@@ -350,7 +336,7 @@ jobs:
       - name: Run Trivy with table output
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
           format: "table"
           severity: "CRITICAL,HIGH"
           exit-code: "0"
@@ -358,7 +344,7 @@ jobs:
       - name: Check for critical vulnerabilities
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
           format: "json"
           output: "trivy-results.json"
           severity: "CRITICAL"
@@ -398,7 +384,7 @@ jobs:
     with:
       service-name: ${{ inputs.service_name }}
       environment: ${{ needs.preflight.outputs.environment }}
-      image-tag: ${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+      image-tag: sha-${{ github.sha }}
       docker-image: ${{ inputs.docker_image }}
       commit-sha: ${{ github.sha }}
       branch-name: ${{ github.ref_name }}
@@ -415,7 +401,7 @@ jobs:
     with:
       service-name: ${{ inputs.service_name }}
       environment: ${{ needs.preflight.outputs.environment }}
-      image-tag: ${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+      image-tag: sha-${{ github.sha }}
       timeout-minutes: 10
     secrets:
       VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
@@ -514,7 +500,7 @@ jobs:
           - **Service**: ${{ inputs.service_name }}
           - **Environment**: ${{ needs.preflight.outputs.environment }}
           - **Version**: ${{ needs.preflight.outputs.version }}
-          - **Image**: ${{ inputs.docker_image }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
+          - **Image**: ${{ inputs.docker_image }}:sha-${{ github.sha }}
           - **Branch**: ${{ github.ref_name }}
           - **Commit**: ${{ github.sha }}
 

@@ -272,8 +272,34 @@ jobs:
           EOF
           fi
 
-          echo "✅ Updated Kubernetes overlay"
+          echo "✅ Updated Kubernetes overlay (kustomization.yaml)"
           echo "k8s-updated=true" >> $GITHUB_OUTPUT
+
+      - name: Update patches.yaml image tag
+        if: steps.precheck.outputs.skip != 'true'
+        working-directory: gitops
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          DOCKER_IMAGE="${{ inputs.docker-image }}"
+          OVERLAY_PATH="${{ steps.update-k8s.outputs.overlay-path }}"
+
+          PATCHES_FILE="${OVERLAY_PATH}/patches.yaml"
+
+          if [[ -f "$PATCHES_FILE" ]]; then
+            echo "Checking patches.yaml at: $PATCHES_FILE"
+
+            if grep -q "/spec/template/spec/containers/0/image" "$PATCHES_FILE"; then
+              # Update the image value in the JSON patch
+              sed -i "s|value: ${DOCKER_IMAGE}:.*|value: ${DOCKER_IMAGE}:${IMAGE_TAG}|" "$PATCHES_FILE"
+              echo "✅ Updated patches.yaml image tag to ${IMAGE_TAG}"
+            else
+              echo "⚠️ No container image patch found in patches.yaml, skipping"
+            fi
+          else
+            echo "⚠️ No patches.yaml found at ${PATCHES_FILE}, skipping"
+          fi
 
       - name: Update Helm values files
         id: update-helm
