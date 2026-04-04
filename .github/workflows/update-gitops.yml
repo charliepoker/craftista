@@ -37,6 +37,9 @@ on:
       GITOPS_REPO_URL:
         description: "GitOps repository URL"
         required: false
+      GITOPS_PAT:
+        description: "GitHub PAT for GitOps repo (direct fallback, bypasses Vault)"
+        required: false
 
 env:
   # Default GitOps repo lives alongside this repo under the same owner.
@@ -112,6 +115,8 @@ jobs:
       - name: Authenticate with Vault and get GitOps deploy key
         id: vault-auth
         if: steps.precheck.outputs.skip != 'true'
+        env:
+          DIRECT_GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
         run: |
           # Set Vault address
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
@@ -137,14 +142,18 @@ jobs:
 
           if [[ -z "$DEPLOY_KEY" ]]; then
             echo "⚠️ GitOps deploy key not found in Vault, falling back to PAT"
-            # Try to get PAT as fallback
+            # Try to get PAT from Vault
             GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
+            # If Vault doesn't have PAT, fall back to the direct GITOPS_PAT secret
+            if [[ -z "$GITOPS_PAT" ]]; then
+              GITOPS_PAT="$DIRECT_GITOPS_PAT"
+            fi
             if [[ -n "$GITOPS_PAT" ]]; then
               echo "::add-mask::$GITOPS_PAT"
               echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
               echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
             else
-              echo "❌ Neither deploy key nor PAT found in Vault"
+              echo "❌ Neither deploy key nor PAT found in Vault or secrets"
               exit 1
             fi
           else

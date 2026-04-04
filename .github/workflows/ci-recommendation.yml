@@ -247,6 +247,7 @@ jobs:
       VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
       VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
       GITOPS_REPO_URL: ${{ secrets.GITOPS_REPO_URL }}
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
 
   notify:
     name: Notify Build Status

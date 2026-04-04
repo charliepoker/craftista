@@ -391,6 +391,7 @@ jobs:
     secrets:
       VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
       VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
 
   # Deployment verification
   verify-deployment:
