@@ -69,463 +69,450 @@ env:
   IMAGE_NAME: ${{ inputs.docker_image }}
 
 jobs:
-    # Pre-flight checks
-    preflight:
-        name: Pre-flight Checks
-        runs-on: ubuntu-latest
-        outputs:
-            should-deploy: ${{ steps.check.outputs.should-deploy }}
-            environment: ${{ steps.check.outputs.environment }}
-            version: ${{ steps.version.outputs.version }}
-            timestamp: ${{ steps.version.outputs.timestamp }}
+  # Pre-flight checks
+  preflight:
+    name: Pre-flight Checks
+    runs-on: ubuntu-latest
+    outputs:
+      should-deploy: ${{ steps.check.outputs.should-deploy }}
+      environment: ${{ steps.check.outputs.environment }}
+      version: ${{ steps.version.outputs.version }}
+      timestamp: ${{ steps.version.outputs.timestamp }}
 
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-
-            - name: Determine environment and deployment
-              id: check
-              run: |
-                  BRANCH="${{ github.ref_name }}"
-
-                  case "$BRANCH" in
-                    main|master)
-                      echo "environment=prod" >> $GITHUB_OUTPUT
-                      echo "should-deploy=true" >> $GITHUB_OUTPUT
-                      ;;
-                    staging)
-                      echo "environment=staging" >> $GITHUB_OUTPUT
-                      echo "should-deploy=true" >> $GITHUB_OUTPUT
-                      ;;
-                    develop|dev)
-                      echo "environment=dev" >> $GITHUB_OUTPUT
-                      echo "should-deploy=true" >> $GITHUB_OUTPUT
-                      ;;
-                    *)
-                      echo "environment=none" >> $GITHUB_OUTPUT
-                      echo "should-deploy=false" >> $GITHUB_OUTPUT
-                      ;;
-                  esac
-
-            - name: Generate version
-              id: version
-              run: |
-                  # Generate semantic version based on commits
-                  VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
-                  SHORT_SHA=$(git rev-parse --short HEAD)
-                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-
-                  # Create version string
-                  FULL_VERSION="${VERSION}-${SHORT_SHA}-${TIMESTAMP}"
-
-                  echo "version=${FULL_VERSION}" >> $GITHUB_OUTPUT
-                  echo "short-sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-                  echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-
-            - name: Check for breaking changes
-              id: breaking
-              run: |
-                  # Check commit messages for breaking changes
-                  if git log --format=%B -n 10 | grep -i "BREAKING CHANGE"; then
-                    echo "breaking=true" >> $GITHUB_OUTPUT
-                    echo "⚠️ Breaking changes detected in recent commits"
-                  else
-                    echo "breaking=false" >> $GITHUB_OUTPUT
-                  fi
-
-    # Build and test
-    build-test:
-        name: Build & Test
-        runs-on: ubuntu-latest
-        needs: preflight
-        defaults:
-          run:
-            working-directory: ${{ inputs.service_path }}
-
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-
-            - name: Cache dependencies
-              uses: actions/cache@v3
-              with:
-                  path: |
-                      ~/.cache
-                      ~/.npm
-                      ~/.m2
-                      ~/go/pkg/mod
-                  key: ${{ runner.os }}-${{ inputs.language }}-${{ hashFiles(format('{0}/**/package*.json', inputs.service_path), format('{0}/**/requirements*.txt', inputs.service_path), format('{0}/**/pom.xml', inputs.service_path), format('{0}/**/go.sum', inputs.service_path)) }}
-                  restore-keys: |
-                      ${{ runner.os }}-${{ inputs.language }}-
-
-            - name: Run tests
-              run: ${{ inputs.test_command }}
-              env:
-                  CI: true
-
-            - name: Upload test results
-              uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                  name: test-results-${{ inputs.service_name }}
-                  path: |
-                      ${{ inputs.service_path }}/coverage/
-                      ${{ inputs.service_path }}/test-results/
-                      ${{ inputs.service_path }}/**/coverage.xml
-                      ${{ inputs.service_path }}/**/htmlcov/
-                  retention-days: 30
-
-    sonarqube-scan:
-        name: SAST - SonarQube Scan
-        runs-on: ubuntu-latest
-        needs: build-test
-        if: inputs.run_sonarqube_scan
-
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-
-            - name: SonarQube Scan
-              uses: sonarsource/sonarqube-scan-action@master
-              env:
-                  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-                  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-              with:
-                  projectBaseDir: ${{ inputs.sonar_project_base_dir != '' && inputs.sonar_project_base_dir || inputs.service_path }}
-                  args: >
-                      -Dsonar.projectKey=${{ inputs.sonar_project_key != '' && inputs.sonar_project_key || format('craftista-{0}', inputs.service_name) }}
-                      ${{ inputs.sonar_args }}
-
-            - name: Check SonarQube Quality Gate
-              uses: sonarsource/sonarqube-quality-gate-action@master
-              timeout-minutes: 5
-              env:
-                  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-                  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-              continue-on-error: true
-
-    # Security scanning
-    security-scan:
-        name: Security Scanning
-        runs-on: ubuntu-latest
-        needs: build-test
-        permissions:
-            security-events: write
-            contents: read
-
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-
-            - name: Run dependency scan
-              uses: aquasecurity/trivy-action@master
-              with:
-                  scan-type: "fs"
-                  scan-ref: ${{ inputs.service_path }}
-                  format: "sarif"
-                  output: "dependency-results.sarif"
-                  severity: "CRITICAL,HIGH,MEDIUM"
-
-            - name: Upload dependency scan results
-              uses: github/codeql-action/upload-sarif@v3
-              if: always()
-              with:
-                  sarif_file: "dependency-results.sarif"
-                  category: "dependency-scan-${{ inputs.service_name }}"
-
-            - name: Run SAST with Semgrep
-              uses: returntocorp/semgrep-action@v1
-              with:
-                  config: auto
-                  publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
-              continue-on-error: true
-
-    # Build and push Docker image
-    build-push-image:
-        name: Build & Push Image
-        runs-on: ubuntu-latest
-        needs: [preflight, build-test, security-scan]
-        if: needs.preflight.outputs.should-deploy == 'true'
-        outputs:
-            image-digest: ${{ steps.build.outputs.digest }}
-            image-tags: ${{ steps.meta.outputs.tags }}
-
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-
-            - name: Set up QEMU
-              uses: docker/setup-qemu-action@v3
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@v3
-              with:
-                  driver-opts: |
-                      image=moby/buildkit:latest
-                      network=host
-
-            - name: Log in to Docker Hub
-              uses: docker/login-action@v3
-              with:
-                  username: ${{ secrets.DOCKERHUB_USERNAME }}
-                  password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-            - name: Extract metadata
-              id: meta
-              uses: docker/metadata-action@v5
-              with:
-                  images: ${{ env.IMAGE_NAME }}
-                  tags: |
-                      type=ref,event=branch
-                      type=ref,event=pr
-                      type=sha,prefix=${{ needs.preflight.outputs.environment }}-
-                      type=semver,pattern={{version}}
-                      type=semver,pattern={{major}}.{{minor}}
-                      type=raw,value=${{ needs.preflight.outputs.version }}
-                      type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-            - name: Build and push
-              id: build
-              uses: docker/build-push-action@v5
-              with:
-                  context: ${{ inputs.service_path }}
-                  file: ${{ inputs.service_path }}/Dockerfile
-                  platforms: linux/amd64,linux/arm64
-                  push: true
-                  tags: ${{ steps.meta.outputs.tags }}
-                  labels: ${{ steps.meta.outputs.labels }}
-                  build-args: |
-                      VERSION=${{ needs.preflight.outputs.version }}
-                      BUILD_DATE=${{ needs.preflight.outputs.timestamp }}
-                      VCS_REF=${{ github.sha }}
-                      ${{ inputs.build_args }}
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
-                  provenance: true
-                  sbom: true
-
-            - name: Generate SBOM
-              uses: anchore/sbom-action@v0
-              with:
-                  image: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-                  format: spdx-json
-                  output-file: sbom-${{ inputs.service_name }}.spdx.json
-
-            - name: Upload SBOM
-              uses: actions/upload-artifact@v4
-              with:
-                  name: sbom-${{ inputs.service_name }}
-                  path: sbom-${{ inputs.service_name }}.spdx.json
-                  retention-days: 90
-
-    # Container security scan
-    container-scan:
-        name: Container Security Scan
-        runs-on: ubuntu-latest
-        needs: [preflight, build-push-image]
-        permissions:
-            security-events: write
-            contents: read
-
-        steps:
-            - name: Run Trivy vulnerability scanner
-              uses: aquasecurity/trivy-action@master
-              with:
-                  image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-                  format: "sarif"
-                  output: "trivy-results.sarif"
-                  severity: "CRITICAL,HIGH"
-
-            - name: Upload Trivy results
-              uses: github/codeql-action/upload-sarif@v3
-              if: always()
-              with:
-                  sarif_file: "trivy-results.sarif"
-                  category: "container-scan-${{ inputs.service_name }}"
-
-            - name: Run Trivy with table output
-              uses: aquasecurity/trivy-action@master
-              with:
-                  image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-                  format: "table"
-                  severity: "CRITICAL,HIGH"
-                  exit-code: "0"
-
-            - name: Check for critical vulnerabilities
-              uses: aquasecurity/trivy-action@master
-              with:
-                  image-ref: ${{ env.IMAGE_NAME }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-                  format: "json"
-                  output: "trivy-results.json"
-                  severity: "CRITICAL"
-                  exit-code: "1"
-              continue-on-error: true
-
-    # Sign container image
-    sign-image:
-        name: Sign Container Image
-        runs-on: ubuntu-latest
-        needs: [preflight, build-push-image, container-scan]
-        if: needs.preflight.outputs.environment == 'prod'
-
-        steps:
-            - name: Install Cosign
-              uses: sigstore/cosign-installer@v3
-
-            - name: Log in to Docker Hub
-              uses: docker/login-action@v3
-              with:
-                  username: ${{ secrets.DOCKERHUB_USERNAME }}
-                  password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-            - name: Sign container image
-              run: |
-                  cosign sign --yes \
-                    ${{ env.IMAGE_NAME }}@${{ needs.build-push-image.outputs.image-digest }}
-              env:
-                  COSIGN_EXPERIMENTAL: 1
-
-    # Update GitOps repository
-    update-gitops:
-        name: Update GitOps
-        needs: [preflight, build-push-image, container-scan]
-        if: needs.preflight.outputs.should-deploy == 'true'
-        uses: ./.github/workflows/update-gitops.yml
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-            service-name: ${{ inputs.service_name }}
-            environment: ${{ needs.preflight.outputs.environment }}
-            image-tag: ${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-            docker-image: ${{ inputs.docker_image }}
-            commit-sha: ${{ github.sha }}
-            branch-name: ${{ github.ref_name }}
-        secrets:
-            VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-            VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          fetch-depth: 0
 
-    # Deployment verification
-    verify-deployment:
-        name: Verify Deployment
-        needs: [preflight, update-gitops]
-        if: needs.preflight.outputs.should-deploy == 'true'
-        uses: ./.github/workflows/verify-deployment.yml
+      - name: Determine environment and deployment
+        id: check
+        run: |
+          BRANCH="${{ github.ref_name }}"
+
+          case "$BRANCH" in
+            develop|dev)
+              echo "environment=dev" >> $GITHUB_OUTPUT
+              echo "should-deploy=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "environment=none" >> $GITHUB_OUTPUT
+              echo "should-deploy=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Generate version
+        id: version
+        run: |
+          # Generate semantic version based on commits
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+          # Create version string
+          FULL_VERSION="${VERSION}-${SHORT_SHA}-${TIMESTAMP}"
+
+          echo "version=${FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "short-sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - name: Check for breaking changes
+        id: breaking
+        run: |
+          # Check commit messages for breaking changes
+          if git log --format=%B -n 10 | grep -i "BREAKING CHANGE"; then
+            echo "breaking=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Breaking changes detected in recent commits"
+          else
+            echo "breaking=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Build and test
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: preflight
+    defaults:
+      run:
+        working-directory: ${{ inputs.service_path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
         with:
-            service-name: ${{ inputs.service_name }}
-            environment: ${{ needs.preflight.outputs.environment }}
-            image-tag: ${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-            timeout-minutes: 10
-        secrets:
-            VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-            VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          path: |
+            ~/.cache
+            ~/.npm
+            ~/.m2
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-${{ inputs.language }}-${{ hashFiles(format('{0}/**/package*.json', inputs.service_path), format('{0}/**/requirements*.txt', inputs.service_path), format('{0}/**/pom.xml', inputs.service_path), format('{0}/**/go.sum', inputs.service_path)) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ inputs.language }}-
 
-    # Notify on completion
-    notify:
-        name: Notify Status
-        runs-on: ubuntu-latest
-        needs:
-            [
-                preflight,
-                build-test,
-                security-scan,
-                build-push-image,
-                container-scan,
-                update-gitops,
-                verify-deployment,
-            ]
+      - name: Run tests
+        run: ${{ inputs.test_command }}
+        env:
+          CI: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: test-results-${{ inputs.service_name }}
+          path: |
+            ${{ inputs.service_path }}/coverage/
+            ${{ inputs.service_path }}/test-results/
+            ${{ inputs.service_path }}/**/coverage.xml
+            ${{ inputs.service_path }}/**/htmlcov/
+          retention-days: 30
 
-        steps:
-            - name: Determine status
-              id: status
-              run: |
-                  if [[ "${{ needs.verify-deployment.result }}" == "success" ]]; then
-                    echo "status=success" >> $GITHUB_OUTPUT
-                    echo "color=good" >> $GITHUB_OUTPUT
-                    echo "emoji=✅" >> $GITHUB_OUTPUT
-                  elif [[ "${{ needs.verify-deployment.result }}" == "failure" ]]; then
-                    echo "status=failed" >> $GITHUB_OUTPUT
-                    echo "color=danger" >> $GITHUB_OUTPUT
-                    echo "emoji=❌" >> $GITHUB_OUTPUT
-                  else
-                    echo "status=partial" >> $GITHUB_OUTPUT
-                    echo "color=warning" >> $GITHUB_OUTPUT
-                    echo "emoji=⚠️" >> $GITHUB_OUTPUT
-                  fi
+  sonarqube-scan:
+    name: SAST - SonarQube Scan
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: inputs.run_sonarqube_scan
 
-            - name: Send Slack notification
-              uses: slackapi/slack-github-action@v1
-              continue-on-error: true
-              with:
-                  payload: |
-                      {
-                        "text": "${{ steps.status.outputs.emoji }} Deployment ${{ steps.status.outputs.status }} for ${{ inputs.service_name }}",
-                        "blocks": [
-                          {
-                            "type": "header",
-                            "text": {
-                              "type": "plain_text",
-                              "text": "${{ steps.status.outputs.emoji }} ${{ inputs.service_name }} - ${{ steps.status.outputs.status }}"
-                            }
-                          },
-                          {
-                            "type": "section",
-                            "fields": [
-                              {
-                                "type": "mrkdwn",
-                                "text": "*Environment:*\n${{ needs.preflight.outputs.environment }}"
-                              },
-                              {
-                                "type": "mrkdwn",
-                                "text": "*Version:*\n${{ needs.preflight.outputs.version }}"
-                              },
-                              {
-                                "type": "mrkdwn",
-                                "text": "*Branch:*\n${{ github.ref_name }}"
-                              },
-                              {
-                                "type": "mrkdwn",
-                                "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
-                              }
-                            ]
-                          },
-                          {
-                            "type": "section",
-                            "text": {
-                              "type": "mrkdwn",
-                              "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
-                            }
-                          }
-                        ]
-                      }
-              env:
-                  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-                  SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-            - name: Create deployment summary
-              run: |
-                  cat >> $GITHUB_STEP_SUMMARY <<EOF
-                  # Deployment Summary - ${{ inputs.service_name }}
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          projectBaseDir: ${{ inputs.sonar_project_base_dir != '' && inputs.sonar_project_base_dir || inputs.service_path }}
+          args: >
+            -Dsonar.projectKey=${{ inputs.sonar_project_key != '' && inputs.sonar_project_key || format('craftista-{0}', inputs.service_name) }}
+            ${{ inputs.sonar_args }}
 
-                  ## Status: ${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.status }}
+      - name: Check SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        continue-on-error: true
 
-                  - **Service**: ${{ inputs.service_name }}
-                  - **Environment**: ${{ needs.preflight.outputs.environment }}
-                  - **Version**: ${{ needs.preflight.outputs.version }}
-                  - **Image**: ${{ inputs.docker_image }}:${{ needs.preflight.outputs.environment }}-${{ github.sha }}
-                  - **Branch**: ${{ github.ref_name }}
-                  - **Commit**: ${{ github.sha }}
+  # Security scanning
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: build-test
+    permissions:
+      security-events: write
+      contents: read
 
-                  ## Pipeline Results
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-                  | Stage | Status |
-                  |-------|--------|
-                  | Build & Test | ${{ needs.build-test.result }} |
-                  | Security Scan | ${{ needs.security-scan.result }} |
-                  | Build Image | ${{ needs.build-push-image.result }} |
-                  | Container Scan | ${{ needs.container-scan.result }} |
-                  | Update GitOps | ${{ needs.update-gitops.result }} |
-                  | Verify Deployment | ${{ needs.verify-deployment.result }} |
-                  EOF
+      - name: Run dependency scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: ${{ inputs.service_path }}
+          format: "sarif"
+          output: "dependency-results.sarif"
+          severity: "CRITICAL,HIGH,MEDIUM"
+
+      - name: Upload dependency scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('dependency-results.sarif') != ''
+        with:
+          sarif_file: "dependency-results.sarif"
+          category: "dependency-scan-${{ inputs.service_name }}"
+
+      - name: Run SAST with Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: true
+
+  # Build and push Docker image
+  build-push-image:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: [preflight, build-test, security-scan]
+    if: needs.preflight.outputs.should-deploy == 'true'
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.service_path }}
+          file: ${{ inputs.service_path }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.preflight.outputs.version }}
+            BUILD_DATE=${{ needs.preflight.outputs.timestamp }}
+            VCS_REF=${{ github.sha }}
+            ${{ inputs.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: spdx-json
+          output-file: sbom-${{ inputs.service_name }}.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ inputs.service_name }}
+          path: sbom-${{ inputs.service_name }}.spdx.json
+          retention-days: 90
+
+  # Container security scan
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    needs: [preflight, build-push-image]
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: "container-scan-${{ inputs.service_name }}"
+
+      - name: Run Trivy with table output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+
+      - name: Check for critical vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: "json"
+          output: "trivy-results.json"
+          severity: "CRITICAL"
+          exit-code: "1"
+        continue-on-error: true
+
+  # Sign container image
+  sign-image:
+    name: Sign Container Image
+    runs-on: ubuntu-latest
+    needs: [preflight, build-push-image, container-scan]
+    if: needs.preflight.outputs.environment == 'prod'
+
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Sign container image
+        run: |
+          cosign sign --yes \
+            ${{ env.IMAGE_NAME }}@${{ needs.build-push-image.outputs.image-digest }}
+        env:
+          COSIGN_EXPERIMENTAL: 1
+
+  # Update GitOps repository
+  update-gitops:
+    name: Update GitOps
+    needs: [preflight, build-push-image, container-scan]
+    if: needs.preflight.outputs.should-deploy == 'true'
+    uses: ./.github/workflows/update-gitops.yml
+    with:
+      service-name: ${{ inputs.service_name }}
+      environment: ${{ needs.preflight.outputs.environment }}
+      image-tag: sha-${{ github.sha }}
+      docker-image: ${{ inputs.docker_image }}
+      commit-sha: ${{ github.sha }}
+      branch-name: ${{ github.ref_name }}
+    secrets:
+      VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+
+  # Deployment verification
+  verify-deployment:
+    name: Verify Deployment
+    needs: [preflight, update-gitops]
+    if: needs.preflight.outputs.should-deploy == 'true'
+    uses: ./.github/workflows/verify-deployment.yml
+    with:
+      service-name: ${{ inputs.service_name }}
+      environment: ${{ needs.preflight.outputs.environment }}
+      image-tag: sha-${{ github.sha }}
+      timeout-minutes: 10
+    secrets:
+      VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+
+  # Notify on completion
+  notify:
+    name: Notify Status
+    runs-on: ubuntu-latest
+    needs:
+      [
+        preflight,
+        build-test,
+        security-scan,
+        build-push-image,
+        container-scan,
+        update-gitops,
+        verify-deployment,
+      ]
+    if: always()
+
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          if [[ "${{ needs.verify-deployment.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+          elif [[ "${{ needs.verify-deployment.result }}" == "failure" ]]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          else
+            echo "status=partial" >> $GITHUB_OUTPUT
+            echo "color=warning" >> $GITHUB_OUTPUT
+            echo "emoji=⚠️" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1
+        continue-on-error: true
+        with:
+          payload: |
+            {
+              "text": "${{ steps.status.outputs.emoji }} Deployment ${{ steps.status.outputs.status }} for ${{ inputs.service_name }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.emoji }} ${{ inputs.service_name }} - ${{ steps.status.outputs.status }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\n${{ needs.preflight.outputs.environment }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:*\n${{ needs.preflight.outputs.version }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Create deployment summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          # Deployment Summary - ${{ inputs.service_name }}
+
+          ## Status: ${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.status }}
+
+          - **Service**: ${{ inputs.service_name }}
+          - **Environment**: ${{ needs.preflight.outputs.environment }}
+          - **Version**: ${{ needs.preflight.outputs.version }}
+          - **Image**: ${{ inputs.docker_image }}:sha-${{ github.sha }}
+          - **Branch**: ${{ github.ref_name }}
+          - **Commit**: ${{ github.sha }}
+
+          ## Pipeline Results
+
+          | Stage | Status |
+          |-------|--------|
+          | Build & Test | ${{ needs.build-test.result }} |
+          | Security Scan | ${{ needs.security-scan.result }} |
+          | Build Image | ${{ needs.build-push-image.result }} |
+          | Container Scan | ${{ needs.container-scan.result }} |
+          | Update GitOps | ${{ needs.update-gitops.result }} |
+          | Verify Deployment | ${{ needs.verify-deployment.result }} |
+          EOF

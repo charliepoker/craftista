@@ -12,8 +12,10 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -41,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @DataJpaTest
 @Testcontainers
+@ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Transactional
 class OrigamiRepositoryIntegrationTest {
@@ -74,6 +77,11 @@ class OrigamiRepositoryIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // Clean up any previously committed data from concurrent tests
+        origamiRepository.deleteAllInBatch();
+        entityManager.flush();
+        entityManager.clear();
+
         // Create test data
         testOrigami1 = Origami.builder()
                 .origamiId("integration-crane-001")
@@ -210,6 +218,10 @@ class OrigamiRepositoryIntegrationTest {
         int numberOfThreads = 10;
         int incrementsPerThread = 5;
 
+        // Commit setup data so it is visible to concurrent threads
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+
         ExecutorService executor = Executors.newFixedThreadPool(numberOfThreads);
 
         // When - Execute concurrent vote increments against PostgreSQL
@@ -238,10 +250,14 @@ class OrigamiRepositoryIntegrationTest {
         executor.shutdown();
         executor.awaitTermination(10, TimeUnit.SECONDS);
 
+        // Start new transaction for verification
+        TestTransaction.start();
+
         // Then - Verify final vote count with PostgreSQL
-        entityManager.refresh(testOrigami1);
+        Optional<Origami> result = origamiRepository.findByOrigamiId(origamiId);
+        assertThat(result).isPresent();
         int expectedTotalIncrements = numberOfThreads * incrementsPerThread;
-        assertThat(testOrigami1.getVoteCount()).isEqualTo(initialVoteCount + expectedTotalIncrements);
+        assertThat(result.get().getVoteCount()).isEqualTo(initialVoteCount + expectedTotalIncrements);
     }
 
     @Test
@@ -307,9 +323,9 @@ class OrigamiRepositoryIntegrationTest {
         );
 
         // Then - Both operations should be committed
-        entityManager.refresh(testOrigami1);
-        assertThat(testOrigami1.getVoteCount()).isEqualTo(initialVoteCount + 1);
-        assertThat(testOrigami1.getName()).isEqualTo("Updated in Transaction Test");
+        Origami freshOrigami = origamiRepository.findByOrigamiId(origamiId).orElseThrow();
+        assertThat(freshOrigami.getVoteCount()).isEqualTo(initialVoteCount + 1);
+        assertThat(freshOrigami.getName()).isEqualTo("Updated in Transaction Test");
     }
 
     @Test

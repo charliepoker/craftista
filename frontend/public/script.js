@@ -5,27 +5,27 @@ let allProducts = []; // global variable to store products for re-rendering
 // Function to load and refresh product data
 async function loadProducts() {
   try {
-    const response = await fetch("/api/products");
+    const response = await fetch('/api/products');
     if (!response.ok) {
-      throw new Error("Network response was not ok" + response.statusText);
+      throw new Error('Network response was not ok' + response.statusText);
     }
     const data = await response.json();
     allProducts = data; // Update global products array
     // Re-render products with current display count
     renderProducts(data.slice(0, currentItems), votingServiceAvailable);
   } catch (error) {
-    console.error("Error loading products:", error);
+    console.error('Error loading products:', error);
   }
 }
 
-document.addEventListener("DOMContentLoaded", async function () {
+document.addEventListener('DOMContentLoaded', async function () {
   await checkVotingServiceStatus();
   //setInterval(checkVotingServiceStatus, 30000);  // checks voting service status every 30 se
 
-  fetch("/api/products")
+  fetch('/api/products')
     .then((response) => {
       if (!response.ok) {
-        throw new Error("Network response was not ok" + response.statusText);
+        throw new Error('Network response was not ok' + response.statusText);
       }
       return response.json();
     })
@@ -35,38 +35,32 @@ document.addEventListener("DOMContentLoaded", async function () {
       renderProducts(data.slice(0, currentItems), votingServiceAvailable);
 
       // Remove loading message
-      document.getElementById("loading-message").style.display = "none";
+      document.getElementById('loading-message').style.display = 'none';
 
       // Set up infinite scroll
-      window.addEventListener("scroll", function () {
+      window.addEventListener('scroll', function () {
         if (
           window.scrollY + window.innerHeight >=
           document.documentElement.scrollHeight
         ) {
           currentItems += 6; // add 6 more items each time
-          renderProducts(
-            allProducts.slice(0, currentItems),
-            votingServiceAvailable
-          );
+          renderProducts(allProducts.slice(0, currentItems), votingServiceAvailable);
         }
       });
     })
     .catch((error) => {
-      console.error(
-        "There has been a problem with your fetch operation:",
-        error
-      );
+      console.error('There has been a problem with your fetch operation:', error);
     });
 
-  document.addEventListener("click", function (event) {
-    if (event.target.classList.contains("read-more")) {
+  document.addEventListener('click', function (event) {
+    if (event.target.classList.contains('read-more')) {
       event.preventDefault();
 
-      const descId = event.target.getAttribute("data-desc-id");
+      const descId = event.target.getAttribute('data-desc-id');
       const fullDescId = `full-${descId}`;
 
-      document.getElementById(descId).classList.toggle("hidden");
-      document.getElementById(fullDescId).classList.toggle("hidden");
+      document.getElementById(descId).classList.toggle('hidden');
+      document.getElementById(fullDescId).classList.toggle('hidden');
     }
   });
 
@@ -85,29 +79,24 @@ document.addEventListener("DOMContentLoaded", async function () {
 
 function renderProducts(products, canVote) {
   // Logic to display products on the page
-  const productContainer = document.getElementById("products");
-  productContainer.innerHTML = ""; // clear the existing items before appending
+  const productContainer = document.getElementById('products');
+  productContainer.innerHTML = ''; // clear the existing items before appending
   products.forEach((product) => {
-    const productElement = document.createElement("div");
-    productElement.className = "product";
+    const voteButtonHtml = canVote
+      ? `<button onclick="submitVote(${product.id})">Vote 👍</button>`
+      : '';
+    const shortDescription = shortenDescription(product.description);
+
+    const productElement = document.createElement('div');
+    productElement.className = 'product';
     productElement.innerHTML = `
       <h3>${product.name}</h3>
       <img src="${product.image_url}" alt="${product.name}" />
       <p id="votes-${product.id}">Votes: Loading...</p>
-      ${
-        canVote
-          ? `<button onclick="submitVote(${product.id})">Vote 👍</button>`
-          : ""
-      }
-      <p class="description" id="desc-${product.id}">${shortenDescription(
-      product.description
-    )}</p>
-      <a href="#" class="read-more" data-desc-id="desc-${
-        product.id
-      }">Read More</a>
-      <p class="full-description hidden" id="full-desc-${product.id}">${
-      product.description
-    }</p>
+      ${voteButtonHtml}
+      <p class="description" id="desc-${product.id}">${shortDescription}</p>
+      <a href="#" class="read-more" data-desc-id="desc-${product.id}">Read More</a>
+      <p class="full-description hidden" id="full-desc-${product.id}">${product.description}</p>
     `;
     productContainer.appendChild(productElement);
     // Fetch votes for this origami
@@ -126,7 +115,7 @@ function fetchVotesForOrigami(origamiId) {
 
 async function submitVote(productId) {
   if (!votingServiceAvailable) {
-    alert("Voting service is currently unavailable. Please try again later.");
+    alert('Voting service is currently unavailable. Please try again later.');
     return;
   }
 
@@ -135,9 +124,9 @@ async function submitVote(productId) {
 
     // Use the correct voting service endpoint through frontend proxy
     const response = await fetch(`/api/origamis/${productId}/vote`, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
       },
     });
 
@@ -148,11 +137,11 @@ async function submitVote(productId) {
       await loadProducts();
     } else {
       // Failed to submit vote - get detailed error message
-      console.log("Vote submission failed");
+      console.log('Vote submission failed');
       const errorText = await response.text();
-      console.error("Error response:", errorText);
+      console.error('Error response:', errorText);
 
-      let errorMessage = "Vote did not get registered";
+      let errorMessage = 'Vote did not get registered';
       if (errorText) {
         try {
           const errorObj = JSON.parse(errorText);
@@ -165,10 +154,8 @@ async function submitVote(productId) {
       alert(`Error: ${errorMessage}`);
     }
   } catch (error) {
-    console.error("Network or fetch error:", error);
-    alert(
-      "Failed to submit vote. Please check your network connection and try again."
-    );
+    console.error('Network or fetch error:', error);
+    alert('Failed to submit vote. Please check your network connection and try again.');
   }
 }
 
@@ -181,22 +168,22 @@ function shortenDescription(description, length = 100) {
 }
 
 function fetchServiceStatus() {
-  fetch("/api/service-status")
+  fetch('/api/service-status')
     .then((response) => response.json())
     .then((data) => {
       renderServiceStatus(data);
     })
     .catch((error) => {
-      console.error("Error fetching service status:", error);
+      console.error('Error fetching service status:', error);
     });
 }
 
 function renderServiceStatus(status) {
-  const statusGrid = document.getElementById("status-grid");
+  const statusGrid = document.getElementById('status-grid');
   // statusGrid.innerHTML = ''; // clear the existing items
 
   Object.keys(status).forEach((service) => {
-    const statusBox = document.createElement("div");
+    const statusBox = document.createElement('div');
     statusBox.className = `status-box ${status[service]}`;
     statusBox.innerHTML = `
       <h4>${capitalizeFirstLetter(service)}</h4>
@@ -211,10 +198,10 @@ function capitalizeFirstLetter(string) {
 }
 
 function fetchDailyOrigami() {
-  fetch("/daily-origami")
+  fetch('/daily-origami')
     .then((response) => {
       if (!response.ok) {
-        throw new Error("Network response was not ok " + response.statusText);
+        throw new Error('Network response was not ok ' + response.statusText);
       }
       return response.json();
     })
@@ -222,32 +209,32 @@ function fetchDailyOrigami() {
       renderDailyOrigami(data);
     })
     .catch((error) => {
-      console.error("Error fetching the daily origami:", error);
+      console.error('Error fetching the daily origami:', error);
       renderDailyOrigamiFallback();
     });
 }
 
 function renderDailyOrigami(data) {
   // Get the container where the origami should be displayed
-  const origamiContainer = document.getElementById("daily-origami-container");
+  const origamiContainer = document.getElementById('daily-origami-container');
 
   // Clear any existing content
-  origamiContainer.innerHTML = "";
+  origamiContainer.innerHTML = '';
 
   // Create and add a header
-  const header = document.createElement("h2");
-  header.innerText = "Origami of the Day";
+  const header = document.createElement('h2');
+  header.innerText = 'Origami of the Day';
   origamiContainer.appendChild(header);
 
   // Create new HTML elements and set their properties
-  const img = document.createElement("img");
+  const img = document.createElement('img');
   img.src = data.image_url;
-  img.alt = "Daily Origami";
+  img.alt = 'Daily Origami';
 
-  const description = document.createElement("p");
+  const description = document.createElement('p');
   description.innerText = data.description;
 
-  const name = document.createElement("h2");
+  const name = document.createElement('h2');
   name.innerText = data.name;
 
   // Append the new elements to the container
@@ -258,31 +245,31 @@ function renderDailyOrigami(data) {
 
 function renderDailyOrigamiFallback() {
   // Get the container where the origami should be displayed
-  const origamiContainer = document.getElementById("daily-origami-container");
+  const origamiContainer = document.getElementById('daily-origami-container');
 
   // Clear any existing content
-  origamiContainer.innerHTML = "";
+  origamiContainer.innerHTML = '';
 
   // Add a fallback message
   origamiContainer.innerHTML =
-    "<p>Sorry, the recommendation engine is not available at the moment.</p>";
+    '<p>Sorry, the recommendation engine is not available at the moment.</p>';
 }
 
 function checkRecommendationStatus() {
-  fetch("/recommendation-status")
+  fetch('/recommendation-status')
     .then((response) => response.json())
     .then((data) => {
       renderRecommendationStatus(data);
     })
     .catch((error) => {
-      console.error("Error fetching recommendation service status:", error);
+      console.error('Error fetching recommendation service status:', error);
     });
 }
 
 function renderRecommendationStatus(status) {
-  const statusGrid = document.getElementById("status-grid");
+  const statusGrid = document.getElementById('status-grid');
 
-  const statusBox = document.createElement("div");
+  const statusBox = document.createElement('div');
   statusBox.className = `status-box ${status.status}`;
   statusBox.innerHTML = `
     <h4>Recommendation</h4>
@@ -292,29 +279,29 @@ function renderRecommendationStatus(status) {
 }
 
 function checkVotingServiceStatus() {
-  return fetch("/votingservice-status")
+  return fetch('/votingservice-status')
     .then((response) => {
       if (response.ok) {
         votingServiceAvailable = true;
         return response.json();
       } else {
         votingServiceAvailable = false;
-        throw new Error("Service not available"); // Throwing an error to be caught in the catch block
+        throw new Error('Service not available'); // Throwing an error to be caught in the catch block
       }
     })
     .then((data) => {
       renderVotingServiceStatus(data);
     })
     .catch((error) => {
-      console.error("Error fetching voting service status:", error);
+      console.error('Error fetching voting service status:', error);
       votingServiceAvailable = false;
     });
 }
 
 function renderVotingServiceStatus(status) {
-  const statusGrid = document.getElementById("status-grid");
+  const statusGrid = document.getElementById('status-grid');
 
-  const statusBox = document.createElement("div");
+  const statusBox = document.createElement('div');
   statusBox.className = `status-box ${status.status}`;
   statusBox.innerHTML = `
     <h4>Voting</h4>

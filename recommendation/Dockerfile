@@ -15,13 +15,15 @@ COPY . .
 RUN go build -o recommendation_app
 
 # Stage 2: Runtime stage
-FROM golang:1.22.0-alpine
+FROM alpine:3.20 AS runtime
 
 # Install runtime dependencies
 RUN apk add --no-cache \
     curl \
-    redis \
     bash
+
+# Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 # Set the working directory for the runtime stage
 WORKDIR /app
@@ -42,6 +44,9 @@ RUN chmod +x /app/scripts/start.sh
 
 # Expose the port your app runs on
 EXPOSE 8080
+
+# Use non-root user
+USER appuser
 
 # Use the startup script as entry point
 ENTRYPOINT ["/app/scripts/start.sh"]

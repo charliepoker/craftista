@@ -29,6 +29,7 @@ import java.util.Properties;
  */
 @Configuration
 @EnableTransactionManagement
+@Profile("!test")
 public class DatabaseConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseConfig.class);

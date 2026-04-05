@@ -43,7 +43,11 @@ wait_for_database() {
         
         # Wait for MongoDB with timeout
         timeout 60 bash -c "
-            until mongosh --host $MONGO_HOST --port $MONGO_PORT --eval 'db.adminCommand(\"ping\")' --quiet > /dev/null 2>&1; do
+            until python3 -c \"
+import socket
+s = socket.create_connection(('$MONGO_HOST', $MONGO_PORT), timeout=3)
+s.close()
+\" > /dev/null 2>&1; do
                 echo 'Waiting for MongoDB...'
                 sleep 2
             done

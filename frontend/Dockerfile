@@ -8,13 +8,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install the project dependencies defined in package.json.
-RUN npm install
+RUN npm ci
 
 # Copy the entire application code into the working directory in the container.
 COPY . .
 
-# Run tests here
-RUN npm test  # This will execute your test command
+# Run unit tests during image build (CI runs the full suite separately)
+RUN npm run test:unit
 
 # Start a new stage using the same base image to create a smaller final image.
 FROM node:22.10.0-alpine3.20

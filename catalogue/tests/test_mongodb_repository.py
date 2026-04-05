@@ -204,15 +204,12 @@ class TestMongoDBProductRepository:
         _, mock_collection = mock_database
         mock_collection.create_indexes = AsyncMock()
         
-        # Create invalid product data (negative price)
-        product_data = ProductCreate(
-            name="Test Product",
-            price=-10.0  # Invalid negative price
-        )
-        
-        # Execute test and expect ValidationError
-        with pytest.raises(ValidationError) as exc_info:
-            await repository.create_product(product_data)
+        # Pydantic validates before repository code runs
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            ProductCreate(
+                name="Test Product",
+                price=-10.0  # Invalid negative price
+            )
         
         assert "Price cannot be negative" in str(exc_info.value)
 

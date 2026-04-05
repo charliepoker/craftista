@@ -68,7 +68,7 @@ public interface OrigamiRepository extends JpaRepository<Origami, Long> {
      * Atomically increment vote count for an origami item.
      * This method ensures thread-safe vote counting.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Origami o SET o.voteCount = o.voteCount + 1, o.updatedAt = CURRENT_TIMESTAMP WHERE o.id = :id")
     int incrementVoteCount(@Param("id") Long id);
@@ -76,7 +76,7 @@ public interface OrigamiRepository extends JpaRepository<Origami, Long> {
     /**
      * Atomically increment vote count by origami ID.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Origami o SET o.voteCount = o.voteCount + 1, o.updatedAt = CURRENT_TIMESTAMP WHERE o.origamiId = :origamiId AND o.active = true")
     int incrementVoteCountByOrigamiId(@Param("origamiId") String origamiId);
@@ -84,7 +84,7 @@ public interface OrigamiRepository extends JpaRepository<Origami, Long> {
     /**
      * Soft delete an origami item by setting active to false.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Origami o SET o.active = false, o.updatedAt = CURRENT_TIMESTAMP WHERE o.id = :id")
     int softDeleteById(@Param("id") Long id);
@@ -92,7 +92,7 @@ public interface OrigamiRepository extends JpaRepository<Origami, Long> {
     /**
      * Soft delete an origami item by external ID.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Origami o SET o.active = false, o.updatedAt = CURRENT_TIMESTAMP WHERE o.origamiId = :origamiId")
     int softDeleteByOrigamiId(@Param("origamiId") String origamiId);
@@ -100,7 +100,7 @@ public interface OrigamiRepository extends JpaRepository<Origami, Long> {
     /**
      * Bulk update origami items from catalogue service data.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Origami o SET o.name = :name, o.description = :description, o.imageUrl = :imageUrl, o.updatedAt = CURRENT_TIMESTAMP WHERE o.origamiId = :origamiId")
     int updateOrigamiDetails(@Param("origamiId") String origamiId, 

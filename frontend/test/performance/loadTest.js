@@ -179,7 +179,7 @@ describe("Frontend Performance Tests", function () {
       // Performance assertions for data aggregation
       expect(response).to.have.status(200);
       expect(aggregationTime).to.be.lessThan(3000); // Should aggregate within 3 seconds
-      expect(response.text).to.include("School of Devops"); // Verify content is rendered
+      expect(response.text).to.include("School of DevOps"); // Verify content is rendered
     });
 
     it("should handle partial API failures gracefully", async () => {

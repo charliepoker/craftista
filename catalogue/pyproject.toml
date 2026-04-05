@@ -1,3 +1,6 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [tool.bandit]
 exclude_dirs = ["tests", "venv", ".git", "__pycache__"]
 skips = ["B101", "B104"]  # Add any tests you want to skip

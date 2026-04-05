@@ -43,8 +43,8 @@ class MockProductRepository(ProductRepository):
             raise RepositoryError(self._failure_message)
 
     def _generate_id(self) -> str:
-        """Generate a new unique ID."""
-        product_id = str(self._next_id)
+        """Generate a new unique ID in valid ObjectId format (24 hex chars)."""
+        product_id = format(self._next_id, '024x')
         self._next_id += 1
         return product_id
 
@@ -316,7 +316,7 @@ class MockProductRepository(ProductRepository):
         """Add a product directly for testing purposes."""
         if not product.id:
             product.id = self._generate_id()
-        self._products[product.id] = product
+        self._products[str(product.id)] = product
 
     def clear_all_products(self) -> None:
         """Clear all products from the mock repository."""

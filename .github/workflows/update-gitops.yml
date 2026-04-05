@@ -30,16 +30,21 @@ on:
     secrets:
       VAULT_ADDR:
         description: "HashiCorp Vault server address"
-        required: true
+        required: false
       VAULT_TOKEN:
         description: "HashiCorp Vault authentication token"
-        required: true
+        required: false
       GITOPS_REPO_URL:
         description: "GitOps repository URL"
         required: false
+      GITOPS_PAT:
+        description: "GitHub PAT for GitOps repo (direct fallback, bypasses Vault)"
+        required: false
 
 env:
-  GITOPS_REPO: 8060633493/craftista-gitOps
+  # Default GitOps repo lives alongside this repo under the same owner.
+  # Can be overridden via the optional `GITOPS_REPO_URL` secret.
+  GITOPS_REPO: ${{ github.repository_owner }}/craftista-gitOps
   GITOPS_BRANCH: main
 
 jobs:
@@ -69,7 +74,45 @@ jobs:
           echo "Environment: ${{ inputs.environment }}"
           echo "Image Tag: ${{ inputs.image-tag }}"
 
+      - name: Precheck Vault configuration
+        id: precheck
+        run: |
+          # Determine GitOps repo to use.
+          # Allow override via secrets.GITOPS_REPO_URL (supports owner/repo, https URL, or git@github.com:owner/repo.git).
+          REPO_INPUT="${{ secrets.GITOPS_REPO_URL }}"
+          if [[ -n "$REPO_INPUT" ]]; then
+            if [[ "$REPO_INPUT" == git@github.com:* ]]; then
+              # git@github.com:owner/repo(.git)
+              REPO_PARSED="${REPO_INPUT#git@github.com:}"
+              REPO_PARSED="${REPO_PARSED%.git}"
+            elif [[ "$REPO_INPUT" == https://github.com/* ]]; then
+              # https://github.com/owner/repo(.git)
+              REPO_PARSED="${REPO_INPUT#https://github.com/}"
+              REPO_PARSED="${REPO_PARSED%.git}"
+            else
+              # assume owner/repo
+              REPO_PARSED="$REPO_INPUT"
+            fi
+            echo "gitops_repo=$REPO_PARSED" >> "$GITHUB_OUTPUT"
+          else
+            echo "gitops_repo=${{ env.GITOPS_REPO }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          VAULT_CONFIGURED=false
+          if [[ -n "${{ secrets.VAULT_ADDR }}" ]] && [[ -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            VAULT_CONFIGURED=true
+          fi
+
+          if [[ "$VAULT_CONFIGURED" == "false" ]] && [[ -z "${{ secrets.GITOPS_PAT }}" ]]; then
+            echo "⚠️ Neither Vault nor GITOPS_PAT configured; skipping GitOps update."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "vault-configured=$VAULT_CONFIGURED" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Vault CLI
+        if: steps.precheck.outputs.skip != 'true' && steps.precheck.outputs.vault-configured == 'true'
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
@@ -77,63 +120,88 @@ jobs:
 
       - name: Authenticate with Vault and get GitOps deploy key
         id: vault-auth
+        if: steps.precheck.outputs.skip != 'true'
+        env:
+          DIRECT_GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
         run: |
+          VAULT_OK=false
+
           # Set Vault address
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
           export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
-          # Test Vault connectivity
-          if ! vault auth -method=token; then
-            echo "❌ Failed to authenticate with Vault"
+          if [[ -n "$VAULT_ADDR" ]] && [[ -n "$VAULT_TOKEN" ]]; then
+            # Test Vault connectivity
+            if vault token lookup >/dev/null 2>&1 || vault login -no-print "$VAULT_TOKEN" >/dev/null 2>&1; then
+              echo "✅ Successfully authenticated with Vault"
+              VAULT_OK=true
+            else
+              echo "⚠️ Failed to authenticate with Vault, will try direct PAT fallback"
+            fi
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not set, will try direct PAT fallback"
+          fi
+
+          if [[ "$VAULT_OK" == "true" ]]; then
+            # Get GitOps repository deploy key
+            DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key 2>/dev/null || echo "")
+
+            if [[ -n "$DEPLOY_KEY" ]]; then
+              echo "✅ Retrieved GitOps deploy key from Vault"
+              echo "::add-mask::$DEPLOY_KEY"
+              {
+                echo "gitops-auth-method=ssh"
+                echo "gitops-ssh-key<<EOF"
+                echo "$DEPLOY_KEY"
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "⚠️ GitOps deploy key not found in Vault, trying PAT from Vault"
+            GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
+            if [[ -n "$GITOPS_PAT" ]]; then
+              echo "::add-mask::$GITOPS_PAT"
+              echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
+              echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "⚠️ No credentials found in Vault, trying direct PAT fallback"
+          fi
+
+          # Final fallback: use GITOPS_PAT secret directly
+          if [[ -n "$DIRECT_GITOPS_PAT" ]]; then
+            echo "✅ Using direct GITOPS_PAT secret"
+            echo "::add-mask::$DIRECT_GITOPS_PAT"
+            echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
+            echo "gitops-token=$DIRECT_GITOPS_PAT" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No authentication method available (Vault failed, no GITOPS_PAT secret)"
             exit 1
           fi
 
-          echo "✅ Successfully authenticated with Vault"
-
-          # Get GitOps repository deploy key
-          DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key 2>/dev/null || echo "")
-
-          if [[ -z "$DEPLOY_KEY" ]]; then
-            echo "⚠️ GitOps deploy key not found in Vault, falling back to PAT"
-            # Try to get PAT as fallback
-            GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
-            if [[ -n "$GITOPS_PAT" ]]; then
-              echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
-              echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Neither deploy key nor PAT found in Vault"
-              exit 1
-            fi
-          else
-            echo "✅ Retrieved GitOps deploy key from Vault"
-            echo "gitops-auth-method=ssh" >> $GITHUB_OUTPUT
-            
-            # Save deploy key to file
-            mkdir -p ~/.ssh
-            echo "$DEPLOY_KEY" > ~/.ssh/gitops_deploy_key
-            chmod 600 ~/.ssh/gitops_deploy_key
-            
-            # Configure SSH
-            cat >> ~/.ssh/config <<EOF
-          Host github.com
-            HostName github.com
-            User git
-            IdentityFile ~/.ssh/gitops_deploy_key
-            StrictHostKeyChecking no
-          EOF
-          fi
-
-      - name: Checkout GitOps repository
+      - name: Checkout GitOps repository (SSH)
         uses: actions/checkout@v4
+        if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'ssh'
         with:
-          repository: ${{ env.GITOPS_REPO }}
+          repository: ${{ steps.precheck.outputs.gitops_repo }}
           ref: ${{ env.GITOPS_BRANCH }}
-          token: ${{ steps.vault-auth.outputs.gitops-auth-method == 'pat' && steps.vault-auth.outputs.gitops-token || '' }}
-          ssh-key: ${{ steps.vault-auth.outputs.gitops-auth-method == 'ssh' && '~/.ssh/gitops_deploy_key' || '' }}
+          ssh-key: ${{ steps.vault-auth.outputs.gitops-ssh-key }}
+          path: gitops
+          fetch-depth: 0
+
+      - name: Checkout GitOps repository (PAT)
+        uses: actions/checkout@v4
+        if: steps.precheck.outputs.skip != 'true' && steps.vault-auth.outputs.gitops-auth-method == 'pat'
+        with:
+          repository: ${{ steps.precheck.outputs.gitops_repo }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ steps.vault-auth.outputs.gitops-token }}
           path: gitops
           fetch-depth: 0
 
       - name: Configure Git
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           git config user.name "GitHub Actions Bot"
@@ -145,6 +213,7 @@ jobs:
 
       - name: Update Kubernetes overlay manifests
         id: update-k8s
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -152,17 +221,44 @@ jobs:
           IMAGE_TAG="${{ inputs.image-tag }}"
           DOCKER_IMAGE="${{ inputs.docker-image }}"
 
-          OVERLAY_PATH="kubernetes/overlays/${ENV}/${SERVICE}"
+          # Your GitOps repo supports multiple overlay roots (e.g. homelab, eks).
+          # Prefer homelab for this project, but auto-detect if the structure differs.
+          CANDIDATES=(
+            "kubernetes/overlays/homelab/${ENV}/${SERVICE}"
+            "kubernetes/overlays/${ENV}/${SERVICE}"
+            "kubernetes/overlays/eks/${ENV}/${SERVICE}"
+          )
+
+          OVERLAY_PATH=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [[ -d "$candidate" ]]; then
+              OVERLAY_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [[ -z "$OVERLAY_PATH" ]]; then
+            mapfile -t MATCHES < <(find kubernetes/overlays -type d -path "*/${ENV}/${SERVICE}" 2>/dev/null | sort || true)
+            if [[ ${#MATCHES[@]} -eq 1 ]]; then
+              OVERLAY_PATH="${MATCHES[0]}"
+            fi
+          fi
+
+          if [[ -z "$OVERLAY_PATH" ]]; then
+            echo "❌ Overlay directory not found for ENV='$ENV' SERVICE='$SERVICE'"
+            echo "Tried:"
+            for candidate in "${CANDIDATES[@]}"; do
+              echo "  - $candidate"
+            done
+            echo "Available overlays:"
+            find kubernetes/overlays -type d -name "$SERVICE" 2>/dev/null | sort || true
+            exit 1
+          fi
+
           KUSTOMIZATION_FILE="${OVERLAY_PATH}/kustomization.yaml"
 
           echo "Updating Kubernetes overlay at: $OVERLAY_PATH"
-
-          if [[ ! -d "$OVERLAY_PATH" ]]; then
-            echo "❌ Overlay directory not found: $OVERLAY_PATH"
-            echo "Available overlays:"
-            find kubernetes/overlays -type d -name "$SERVICE" || true
-            exit 1
-          fi
+          echo "overlay-path=$OVERLAY_PATH" >> "$GITHUB_OUTPUT"
 
           if [[ ! -f "$KUSTOMIZATION_FILE" ]]; then
             echo "❌ Kustomization file not found: $KUSTOMIZATION_FILE"
@@ -178,8 +274,12 @@ jobs:
             
             # Check if our image already exists
             if grep -q "name: $DOCKER_IMAGE" "$KUSTOMIZATION_FILE"; then
-              # Update existing image tag
-              sed -i "/name: $DOCKER_IMAGE/,/newTag:/ s/newTag:.*/newTag: $IMAGE_TAG/" "$KUSTOMIZATION_FILE"
+              # Update existing image tag using awk for safer multi-line editing
+              awk -v img="$DOCKER_IMAGE" -v tag="$IMAGE_TAG" '
+                /name:/ && $0 ~ img { found=1 }
+                found && /newTag:/ { print "    newTag: " tag; found=0; next }
+                { print }
+              ' "$KUSTOMIZATION_FILE" > "$KUSTOMIZATION_FILE.tmp" && mv "$KUSTOMIZATION_FILE.tmp" "$KUSTOMIZATION_FILE"
             else
               # Add new image entry
               sed -i "/images:/a\\  - name: $DOCKER_IMAGE\\n    newTag: $IMAGE_TAG" "$KUSTOMIZATION_FILE"
@@ -194,11 +294,38 @@ jobs:
           EOF
           fi
 
-          echo "✅ Updated Kubernetes overlay"
+          echo "✅ Updated Kubernetes overlay (kustomization.yaml)"
           echo "k8s-updated=true" >> $GITHUB_OUTPUT
+
+      - name: Update patches.yaml image tag
+        if: steps.precheck.outputs.skip != 'true'
+        working-directory: gitops
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          ENV="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image-tag }}"
+          DOCKER_IMAGE="${{ inputs.docker-image }}"
+          OVERLAY_PATH="${{ steps.update-k8s.outputs.overlay-path }}"
+
+          PATCHES_FILE="${OVERLAY_PATH}/patches.yaml"
+
+          if [[ -f "$PATCHES_FILE" ]]; then
+            echo "Checking patches.yaml at: $PATCHES_FILE"
+
+            if grep -q "/spec/template/spec/containers/0/image" "$PATCHES_FILE"; then
+              # Update the image value in the JSON patch
+              sed -i "s|value: ${DOCKER_IMAGE}:.*|value: ${DOCKER_IMAGE}:${IMAGE_TAG}|" "$PATCHES_FILE"
+              echo "✅ Updated patches.yaml image tag to ${IMAGE_TAG}"
+            else
+              echo "⚠️ No container image patch found in patches.yaml, skipping"
+            fi
+          else
+            echo "⚠️ No patches.yaml found at ${PATCHES_FILE}, skipping"
+          fi
 
       - name: Update Helm values files
         id: update-helm
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -238,6 +365,7 @@ jobs:
           fi
 
       - name: Verify changes
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           echo "=== Git Status ==="
@@ -258,6 +386,7 @@ jobs:
 
       - name: Commit and push changes
         id: commit
+        if: steps.precheck.outputs.skip != 'true'
         working-directory: gitops
         run: |
           SERVICE="${{ inputs.service-name }}"
@@ -332,7 +461,7 @@ jobs:
           fi
 
       - name: Handle merge conflicts and notifications
-        if: failure()
+        if: steps.precheck.outputs.skip != 'true' && failure()
         run: |
           SERVICE="${{ inputs.service-name }}"
           ENV="${{ inputs.environment }}"
@@ -370,7 +499,7 @@ jobs:
           cat /tmp/failure-summary.md
 
       - name: Create success notification
-        if: success() && steps.commit.outputs.committed == 'true'
+        if: steps.precheck.outputs.skip != 'true' && success() && steps.commit.outputs.committed == 'true'
         run: |
           SERVICE="${{ inputs.service-name }}"
           ENV="${{ inputs.environment }}"
@@ -390,7 +519,7 @@ jobs:
           echo ""
           echo "Updated files:"
           if [[ "${{ steps.update-k8s.outputs.k8s-updated }}" == "true" ]]; then
-            echo "  ✅ Kubernetes overlay: kubernetes/overlays/$ENV/$SERVICE/kustomization.yaml"
+            echo "  ✅ Kubernetes overlay: ${{ steps.update-k8s.outputs.overlay-path }}/kustomization.yaml"
           fi
           if [[ "${{ steps.update-helm.outputs.helm-updated }}" == "true" ]]; then
             echo "  ✅ Helm values: helm/charts/$SERVICE/values-$ENV.yaml"

@@ -146,7 +146,9 @@ jobs:
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
           export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
-          vault auth -method=token
+          if ! vault token lookup >/dev/null 2>&1; then
+            vault login -no-print "$VAULT_TOKEN" >/dev/null
+          fi
 
           KUBECONFIG_PATH="secret/kubernetes/${{ inputs.environment }}/kubeconfig"
           vault kv get -field=config "$KUBECONFIG_PATH" > /tmp/kubeconfig
@@ -226,7 +228,9 @@ jobs:
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
           export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
-          vault auth -method=token
+          if ! vault token lookup >/dev/null 2>&1; then
+            vault login -no-print "$VAULT_TOKEN" >/dev/null
+          fi
 
           GITOPS_DEPLOY_KEY=""
           if vault kv get -field=private_key secret/github-actions/gitops-deploy-key >/dev/null 2>&1; then
