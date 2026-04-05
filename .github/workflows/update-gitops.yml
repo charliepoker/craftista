@@ -98,15 +98,21 @@ jobs:
             echo "gitops_repo=${{ env.GITOPS_REPO }}" >> "$GITHUB_OUTPUT"
           fi
 
-          if [[ -z "${{ secrets.VAULT_ADDR }}" ]] || [[ -z "${{ secrets.VAULT_TOKEN }}" ]]; then
-            echo "⚠️ VAULT_ADDR/VAULT_TOKEN not configured in repo secrets; skipping GitOps update."
+          VAULT_CONFIGURED=false
+          if [[ -n "${{ secrets.VAULT_ADDR }}" ]] && [[ -n "${{ secrets.VAULT_TOKEN }}" ]]; then
+            VAULT_CONFIGURED=true
+          fi
+
+          if [[ "$VAULT_CONFIGURED" == "false" ]] && [[ -z "${{ secrets.GITOPS_PAT }}" ]]; then
+            echo "⚠️ Neither Vault nor GITOPS_PAT configured; skipping GitOps update."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "vault-configured=$VAULT_CONFIGURED" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install Vault CLI
-        if: steps.precheck.outputs.skip != 'true'
+        if: steps.precheck.outputs.skip != 'true' && steps.precheck.outputs.vault-configured == 'true'
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
@@ -118,53 +124,60 @@ jobs:
         env:
           DIRECT_GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
         run: |
+          VAULT_OK=false
+
           # Set Vault address
           export VAULT_ADDR="${{ secrets.VAULT_ADDR }}"
           export VAULT_TOKEN="${{ secrets.VAULT_TOKEN }}"
 
-          if [[ -z "$VAULT_ADDR" ]] || [[ -z "$VAULT_TOKEN" ]]; then
-            echo "❌ VAULT_ADDR or VAULT_TOKEN is not set"
-            exit 1
-          fi
-
-          # Test Vault connectivity
-          if ! vault token lookup >/dev/null 2>&1; then
-            if ! vault login -no-print "$VAULT_TOKEN" >/dev/null 2>&1; then
-              echo "❌ Failed to authenticate with Vault"
-              exit 1
+          if [[ -n "$VAULT_ADDR" ]] && [[ -n "$VAULT_TOKEN" ]]; then
+            # Test Vault connectivity
+            if vault token lookup >/dev/null 2>&1 || vault login -no-print "$VAULT_TOKEN" >/dev/null 2>&1; then
+              echo "✅ Successfully authenticated with Vault"
+              VAULT_OK=true
+            else
+              echo "⚠️ Failed to authenticate with Vault, will try direct PAT fallback"
             fi
+          else
+            echo "⚠️ VAULT_ADDR or VAULT_TOKEN not set, will try direct PAT fallback"
           fi
 
-          echo "✅ Successfully authenticated with Vault"
+          if [[ "$VAULT_OK" == "true" ]]; then
+            # Get GitOps repository deploy key
+            DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key 2>/dev/null || echo "")
 
-          # Get GitOps repository deploy key
-          DEPLOY_KEY=$(vault kv get -field=private_key secret/github-actions/gitops-deploy-key 2>/dev/null || echo "")
+            if [[ -n "$DEPLOY_KEY" ]]; then
+              echo "✅ Retrieved GitOps deploy key from Vault"
+              echo "::add-mask::$DEPLOY_KEY"
+              {
+                echo "gitops-auth-method=ssh"
+                echo "gitops-ssh-key<<EOF"
+                echo "$DEPLOY_KEY"
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
 
-          if [[ -z "$DEPLOY_KEY" ]]; then
-            echo "⚠️ GitOps deploy key not found in Vault, falling back to PAT"
-            # Try to get PAT from Vault
+            echo "⚠️ GitOps deploy key not found in Vault, trying PAT from Vault"
             GITOPS_PAT=$(vault kv get -field=token secret/github-actions/gitops-pat 2>/dev/null || echo "")
-            # If Vault doesn't have PAT, fall back to the direct GITOPS_PAT secret
-            if [[ -z "$GITOPS_PAT" ]]; then
-              GITOPS_PAT="$DIRECT_GITOPS_PAT"
-            fi
             if [[ -n "$GITOPS_PAT" ]]; then
               echo "::add-mask::$GITOPS_PAT"
               echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
               echo "gitops-token=$GITOPS_PAT" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Neither deploy key nor PAT found in Vault or secrets"
-              exit 1
+              exit 0
             fi
+            echo "⚠️ No credentials found in Vault, trying direct PAT fallback"
+          fi
+
+          # Final fallback: use GITOPS_PAT secret directly
+          if [[ -n "$DIRECT_GITOPS_PAT" ]]; then
+            echo "✅ Using direct GITOPS_PAT secret"
+            echo "::add-mask::$DIRECT_GITOPS_PAT"
+            echo "gitops-auth-method=pat" >> $GITHUB_OUTPUT
+            echo "gitops-token=$DIRECT_GITOPS_PAT" >> $GITHUB_OUTPUT
           else
-            echo "✅ Retrieved GitOps deploy key from Vault"
-            echo "::add-mask::$DEPLOY_KEY"
-            {
-              echo "gitops-auth-method=ssh"
-              echo "gitops-ssh-key<<EOF"
-              echo "$DEPLOY_KEY"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            echo "❌ No authentication method available (Vault failed, no GITOPS_PAT secret)"
+            exit 1
           fi
 
       - name: Checkout GitOps repository (SSH)
