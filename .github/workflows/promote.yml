@@ -25,39 +25,71 @@ on:
                 required: false
                 type: string
 
-env:
-    DOCKER_IMAGES: |
-        frontend=8060633493/craftista-frontend
-        catalogue=8060633493/craftista-catalogue
-        voting=8060633493/craftista-voting
-        recommendation=8060633493/craftista-recommendation
-
 jobs:
     resolve-tag:
         name: Resolve Image Tag
         runs-on: ubuntu-latest
         outputs:
-            image-tag: ${{ steps.resolve.outputs.image-tag }}
+            tag-map: ${{ steps.resolve.outputs.tag-map }}
             services: ${{ steps.resolve.outputs.services }}
         steps:
             - name: Resolve image tag and services
               id: resolve
+              env:
+                  GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
               run: |
                   # Determine which services to promote
                   if [[ "${{ inputs.service }}" == "all" ]]; then
-                    echo 'services=["frontend","catalogue","voting","recommendation"]' >> "$GITHUB_OUTPUT"
+                    SERVICES='["frontend","catalogue","voting","recommendation"]'
                   else
-                    echo 'services=["${{ inputs.service }}"]' >> "$GITHUB_OUTPUT"
+                    SERVICES='["${{ inputs.service }}"]'
                   fi
+                  echo "services=${SERVICES}" >> "$GITHUB_OUTPUT"
 
-                  # Use provided tag or fail if not provided
                   if [[ -n "${{ inputs.image-tag }}" ]]; then
-                    echo "image-tag=${{ inputs.image-tag }}" >> "$GITHUB_OUTPUT"
-                    echo "✅ Using provided image tag: ${{ inputs.image-tag }}"
+                    # Explicit tag provided — use it for all services
+                    TAG="${{ inputs.image-tag }}"
+                    TAG_MAP="{}"
+                    for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+                      TAG_MAP=$(echo "$TAG_MAP" | jq --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
+                    done
+                    echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
+                    echo "✅ Using provided image tag: ${TAG}"
+                    echo "$TAG_MAP" | jq .
                   else
-                    echo "❌ No image tag provided. Check the dev overlay in the GitOps repo for the current tag."
-                    echo "   Example: sha-abc1234"
-                    exit 1
+                    # Auto-detect from dev overlay in the GitOps repo
+                    echo "🔍 Auto-detecting image tags from dev overlay..."
+
+                    GITOPS_REPO="https://x-access-token:${GITOPS_PAT}@github.com/charliepoker/craftista-gitOps.git"
+                    git clone --depth 1 "${GITOPS_REPO}" /tmp/gitops-repo
+
+                    TAG_MAP="{}"
+                    for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+                      PATCH_FILE="/tmp/gitops-repo/kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
+                      if [[ ! -f "$PATCH_FILE" ]]; then
+                        echo "❌ Dev overlay not found: kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
+                        exit 1
+                      fi
+
+                      # Extract tag from the image value in the JSON patch
+                      IMAGE_VALUE=$(yq eval '.[] | select(.path == "/spec/template/spec/containers/0/image") | .value' "$PATCH_FILE")
+                      TAG=$(echo "$IMAGE_VALUE" | cut -d: -f2)
+
+                      if [[ -z "$TAG" || "$TAG" == "$IMAGE_VALUE" ]]; then
+                        echo "❌ Could not extract image tag for ${svc} from ${PATCH_FILE}"
+                        exit 1
+                      fi
+
+                      TAG_MAP=$(echo "$TAG_MAP" | jq --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
+                      echo "  ${svc}: ${TAG}"
+                    done
+
+                    echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
+                    echo ""
+                    echo "✅ Auto-detected tags:"
+                    echo "$TAG_MAP" | jq .
+
+                    rm -rf /tmp/gitops-repo
                   fi
 
     validate-image:
@@ -68,20 +100,17 @@ jobs:
             matrix:
                 service: ${{ fromJson(needs.resolve-tag.outputs.services) }}
         steps:
-            - name: Determine docker image name
+            - name: Determine docker image and tag
               id: image
               run: |
-                  case "${{ matrix.service }}" in
-                    frontend)      echo "docker-image=8060633493/craftista-frontend" >> "$GITHUB_OUTPUT" ;;
-                    catalogue)     echo "docker-image=8060633493/craftista-catalogue" >> "$GITHUB_OUTPUT" ;;
-                    voting)        echo "docker-image=8060633493/craftista-voting" >> "$GITHUB_OUTPUT" ;;
-                    recommendation) echo "docker-image=8060633493/craftista-recommendation" >> "$GITHUB_OUTPUT" ;;
-                  esac
+                  echo "docker-image=8060633493/craftista-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+                  TAG=$(echo '${{ needs.resolve-tag.outputs.tag-map }}' | jq -r '."${{ matrix.service }}"')
+                  echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
             - name: Verify image tag exists on Docker Hub
               run: |
                   IMAGE="${{ steps.image.outputs.docker-image }}"
-                  TAG="${{ needs.resolve-tag.outputs.image-tag }}"
+                  TAG="${{ steps.image.outputs.tag }}"
 
                   echo "🔍 Checking if ${IMAGE}:${TAG} exists..."
 
@@ -107,7 +136,7 @@ jobs:
               run: |
                   echo "✅ Production promotion approved by: ${{ github.actor }}"
                   echo "   Services: ${{ needs.resolve-tag.outputs.services }}"
-                  echo "   Image tag: ${{ needs.resolve-tag.outputs.image-tag }}"
+                  echo "   Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
 
     promote:
         name: Promote ${{ matrix.service }} to ${{ inputs.target-environment }}
@@ -121,7 +150,7 @@ jobs:
         with:
             service-name: ${{ matrix.service }}
             environment: ${{ inputs.target-environment }}
-            image-tag: ${{ needs.resolve-tag.outputs.image-tag }}
+            image-tag: ${{ fromJson(needs.resolve-tag.outputs.tag-map)[matrix.service] }}
             docker-image: 8060633493/craftista-${{ matrix.service }}
             commit-sha: ${{ github.sha }}
             branch-name: promote-${{ inputs.target-environment }}
@@ -143,7 +172,7 @@ jobs:
                   echo "===================="
                   echo "Services: ${{ needs.resolve-tag.outputs.services }}"
                   echo "Target: ${{ inputs.target-environment }}"
-                  echo "Image tag: ${{ needs.resolve-tag.outputs.image-tag }}"
+                  echo "Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
                   echo "Triggered by: ${{ github.actor }}"
                   echo ""
                   echo "✅ GitOps repo updated. ArgoCD will sync the changes automatically."
