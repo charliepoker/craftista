@@ -57,26 +57,36 @@ jobs:
                     echo "✅ Using provided image tag: ${TAG}"
                     echo "$TAG_MAP" | jq .
                   else
-                    # Auto-detect from dev overlay in the GitOps repo
+                    # Auto-detect from dev overlay via GitHub API (no clone needed)
                     echo "🔍 Auto-detecting image tags from dev overlay..."
 
-                    GITOPS_REPO="https://x-access-token:${GITOPS_PAT}@github.com/charliepoker/craftista-gitOps.git"
-                    git clone --depth 1 "${GITOPS_REPO}" /tmp/gitops-repo
+                    # Trim any whitespace/newlines from PAT
+                    CLEAN_PAT=$(echo "${GITOPS_PAT}" | tr -d '[:space:]')
 
                     TAG_MAP="{}"
                     for svc in $(echo "$SERVICES" | jq -r '.[]'); do
-                      PATCH_FILE="/tmp/gitops-repo/kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
-                      if [[ ! -f "$PATCH_FILE" ]]; then
-                        echo "❌ Dev overlay not found: kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
+                      FILE_PATH="kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
+                      echo "  Fetching ${FILE_PATH}..."
+
+                      # Fetch raw file content via GitHub API
+                      CONTENT=$(curl -sf \
+                        -H "Authorization: token ${CLEAN_PAT}" \
+                        -H "Accept: application/vnd.github.v3.raw" \
+                        "https://api.github.com/repos/charliepoker/craftista-gitOps/contents/${FILE_PATH}?ref=main")
+
+                      if [[ $? -ne 0 || -z "$CONTENT" ]]; then
+                        echo "❌ Failed to fetch dev overlay for ${svc}"
+                        echo "   Tried: ${FILE_PATH}"
                         exit 1
                       fi
 
-                      # Extract tag from the image value in the JSON patch
-                      IMAGE_VALUE=$(yq eval '.[] | select(.path == "/spec/template/spec/containers/0/image") | .value' "$PATCH_FILE")
+                      # Extract image value and tag using grep/sed (no yq needed)
+                      IMAGE_VALUE=$(echo "$CONTENT" | grep -A1 '/spec/template/spec/containers/0/image' | grep 'value:' | sed 's/.*value: *//')
                       TAG=$(echo "$IMAGE_VALUE" | cut -d: -f2)
 
                       if [[ -z "$TAG" || "$TAG" == "$IMAGE_VALUE" ]]; then
-                        echo "❌ Could not extract image tag for ${svc} from ${PATCH_FILE}"
+                        echo "❌ Could not extract image tag for ${svc}"
+                        echo "   Raw value: ${IMAGE_VALUE}"
                         exit 1
                       fi
 
@@ -88,8 +98,6 @@ jobs:
                     echo ""
                     echo "✅ Auto-detected tags:"
                     echo "$TAG_MAP" | jq .
-
-                    rm -rf /tmp/gitops-repo
                   fi
 
     validate-image:
