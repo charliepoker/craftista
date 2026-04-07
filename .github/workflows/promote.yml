@@ -1,186 +1,186 @@
 name: Promote Image to Environment
 
 on:
-    workflow_dispatch:
-        inputs:
-            service:
-                description: "Service to promote"
-                required: true
-                type: choice
-                options:
-                    - frontend
-                    - catalogue
-                    - voting
-                    - recommendation
-                    - all
-            target-environment:
-                description: "Target environment"
-                required: true
-                type: choice
-                options:
-                    - staging
-                    - prod
-            image-tag:
-                description: "Image tag to promote (e.g., sha-abc1234). Leave empty to auto-detect from dev."
-                required: false
-                type: string
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to promote"
+        required: true
+        type: choice
+        options:
+          - frontend
+          - catalogue
+          - voting
+          - recommendation
+          - all
+      target-environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      image-tag:
+        description: "Image tag to promote (e.g., sha-abc1234). Leave empty to auto-detect from dev."
+        required: false
+        type: string
 
 jobs:
-    resolve-tag:
-        name: Resolve Image Tag
-        runs-on: ubuntu-latest
-        outputs:
-            tag-map: ${{ steps.resolve.outputs.tag-map }}
-            services: ${{ steps.resolve.outputs.services }}
-        steps:
-            - name: Resolve image tag and services
-              id: resolve
-              env:
-                  GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
-              run: |
-                  # Determine which services to promote
-                  if [[ "${{ inputs.service }}" == "all" ]]; then
-                    SERVICES='["frontend","catalogue","voting","recommendation"]'
-                  else
-                    SERVICES='["${{ inputs.service }}"]'
-                  fi
-                  echo "services=${SERVICES}" >> "$GITHUB_OUTPUT"
+  resolve-tag:
+    name: Resolve Image Tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag-map: ${{ steps.resolve.outputs.tag-map }}
+      services: ${{ steps.resolve.outputs.services }}
+    steps:
+      - name: Resolve image tag and services
+        id: resolve
+        env:
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+        run: |
+          # Determine which services to promote
+          if [[ "${{ inputs.service }}" == "all" ]]; then
+            SERVICES='["frontend","catalogue","voting","recommendation"]'
+          else
+            SERVICES='["${{ inputs.service }}"]'
+          fi
+          echo "services=${SERVICES}" >> "$GITHUB_OUTPUT"
 
-                  if [[ -n "${{ inputs.image-tag }}" ]]; then
-                    # Explicit tag provided — use it for all services
-                    TAG="${{ inputs.image-tag }}"
-                    TAG_MAP="{}"
-                    for svc in $(echo "$SERVICES" | jq -r '.[]'); do
-                      TAG_MAP=$(echo "$TAG_MAP" | jq --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
-                    done
-                    echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
-                    echo "✅ Using provided image tag: ${TAG}"
-                    echo "$TAG_MAP" | jq .
-                  else
-                    # Auto-detect from dev overlay via GitHub API (no clone needed)
-                    echo "🔍 Auto-detecting image tags from dev overlay..."
+          if [[ -n "${{ inputs.image-tag }}" ]]; then
+            # Explicit tag provided — use it for all services
+            TAG="${{ inputs.image-tag }}"
+            TAG_MAP="{}"
+            for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+              TAG_MAP=$(echo "$TAG_MAP" | jq -c --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
+            done
+            echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
+            echo "✅ Using provided image tag: ${TAG}"
+            echo "$TAG_MAP" | jq .
+          else
+            # Auto-detect from dev overlay via GitHub API (no clone needed)
+            echo "🔍 Auto-detecting image tags from dev overlay..."
 
-                    # Trim any whitespace/newlines from PAT
-                    CLEAN_PAT=$(echo "${GITOPS_PAT}" | tr -d '[:space:]')
+            # Trim any whitespace/newlines from PAT
+            CLEAN_PAT=$(echo "${GITOPS_PAT}" | tr -d '[:space:]')
 
-                    TAG_MAP="{}"
-                    for svc in $(echo "$SERVICES" | jq -r '.[]'); do
-                      FILE_PATH="kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
-                      echo "  Fetching ${FILE_PATH}..."
+            TAG_MAP="{}"
+            for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+              FILE_PATH="kubernetes/overlays/homelab/dev/${svc}/patches.yaml"
+              echo "  Fetching ${FILE_PATH}..."
 
-                      # Fetch raw file content via GitHub API
-                      CONTENT=$(curl -sf \
-                        -H "Authorization: token ${CLEAN_PAT}" \
-                        -H "Accept: application/vnd.github.v3.raw" \
-                        "https://api.github.com/repos/charliepoker/craftista-gitOps/contents/${FILE_PATH}?ref=main")
+              # Fetch raw file content via GitHub API
+              CONTENT=$(curl -sf \
+                -H "Authorization: token ${CLEAN_PAT}" \
+                -H "Accept: application/vnd.github.v3.raw" \
+                "https://api.github.com/repos/charliepoker/craftista-gitOps/contents/${FILE_PATH}?ref=main")
 
-                      if [[ $? -ne 0 || -z "$CONTENT" ]]; then
-                        echo "❌ Failed to fetch dev overlay for ${svc}"
-                        echo "   Tried: ${FILE_PATH}"
-                        exit 1
-                      fi
+              if [[ $? -ne 0 || -z "$CONTENT" ]]; then
+                echo "❌ Failed to fetch dev overlay for ${svc}"
+                echo "   Tried: ${FILE_PATH}"
+                exit 1
+              fi
 
-                      # Extract image value and tag using grep/sed (no yq needed)
-                      IMAGE_VALUE=$(echo "$CONTENT" | grep -A1 '/spec/template/spec/containers/0/image' | grep 'value:' | sed 's/.*value: *//')
-                      TAG=$(echo "$IMAGE_VALUE" | cut -d: -f2)
+              # Extract image value and tag using grep/sed (no yq needed)
+              IMAGE_VALUE=$(echo "$CONTENT" | grep -A1 '/spec/template/spec/containers/0/image' | grep 'value:' | sed 's/.*value: *//')
+              TAG=$(echo "$IMAGE_VALUE" | cut -d: -f2)
 
-                      if [[ -z "$TAG" || "$TAG" == "$IMAGE_VALUE" ]]; then
-                        echo "❌ Could not extract image tag for ${svc}"
-                        echo "   Raw value: ${IMAGE_VALUE}"
-                        exit 1
-                      fi
+              if [[ -z "$TAG" || "$TAG" == "$IMAGE_VALUE" ]]; then
+                echo "❌ Could not extract image tag for ${svc}"
+                echo "   Raw value: ${IMAGE_VALUE}"
+                exit 1
+              fi
 
-                      TAG_MAP=$(echo "$TAG_MAP" | jq --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
-                      echo "  ${svc}: ${TAG}"
-                    done
+              TAG_MAP=$(echo "$TAG_MAP" | jq -c --arg s "$svc" --arg t "$TAG" '. + {($s): $t}')
+              echo "  ${svc}: ${TAG}"
+            done
 
-                    echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
-                    echo ""
-                    echo "✅ Auto-detected tags:"
-                    echo "$TAG_MAP" | jq .
-                  fi
+            echo "tag-map=${TAG_MAP}" >> "$GITHUB_OUTPUT"
+            echo ""
+            echo "✅ Auto-detected tags:"
+            echo "$TAG_MAP" | jq .
+          fi
 
-    validate-image:
-        name: Validate Image Exists (${{ matrix.service }})
-        runs-on: ubuntu-latest
-        needs: resolve-tag
-        strategy:
-            matrix:
-                service: ${{ fromJson(needs.resolve-tag.outputs.services) }}
-        steps:
-            - name: Determine docker image and tag
-              id: image
-              run: |
-                  echo "docker-image=8060633493/craftista-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
-                  TAG=$(echo '${{ needs.resolve-tag.outputs.tag-map }}' | jq -r '."${{ matrix.service }}"')
-                  echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+  validate-image:
+    name: Validate Image Exists (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: resolve-tag
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.resolve-tag.outputs.services) }}
+    steps:
+      - name: Determine docker image and tag
+        id: image
+        run: |
+          echo "docker-image=8060633493/craftista-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          TAG=$(echo '${{ needs.resolve-tag.outputs.tag-map }}' | jq -r '."${{ matrix.service }}"')
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-            - name: Verify image tag exists on Docker Hub
-              run: |
-                  IMAGE="${{ steps.image.outputs.docker-image }}"
-                  TAG="${{ steps.image.outputs.tag }}"
+      - name: Verify image tag exists on Docker Hub
+        run: |
+          IMAGE="${{ steps.image.outputs.docker-image }}"
+          TAG="${{ steps.image.outputs.tag }}"
 
-                  echo "🔍 Checking if ${IMAGE}:${TAG} exists..."
+          echo "🔍 Checking if ${IMAGE}:${TAG} exists..."
 
-                  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                    "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}")
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}")
 
-                  if [[ "$HTTP_CODE" == "200" ]]; then
-                    echo "✅ Image ${IMAGE}:${TAG} exists"
-                  else
-                    echo "❌ Image ${IMAGE}:${TAG} not found (HTTP ${HTTP_CODE})"
-                    echo "   Make sure this image was built and pushed by the CI pipeline."
-                    exit 1
-                  fi
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "✅ Image ${IMAGE}:${TAG} exists"
+          else
+            echo "❌ Image ${IMAGE}:${TAG} not found (HTTP ${HTTP_CODE})"
+            echo "   Make sure this image was built and pushed by the CI pipeline."
+            exit 1
+          fi
 
-    confirm-production:
-        name: Production Approval
-        runs-on: ubuntu-latest
-        needs: [resolve-tag, validate-image]
-        if: inputs.target-environment == 'prod'
-        environment: production
-        steps:
-            - name: Production promotion approved
-              run: |
-                  echo "✅ Production promotion approved by: ${{ github.actor }}"
-                  echo "   Services: ${{ needs.resolve-tag.outputs.services }}"
-                  echo "   Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
+  confirm-production:
+    name: Production Approval
+    runs-on: ubuntu-latest
+    needs: [resolve-tag, validate-image]
+    if: inputs.target-environment == 'prod'
+    environment: production
+    steps:
+      - name: Production promotion approved
+        run: |
+          echo "✅ Production promotion approved by: ${{ github.actor }}"
+          echo "   Services: ${{ needs.resolve-tag.outputs.services }}"
+          echo "   Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
 
-    promote:
-        name: Promote ${{ matrix.service }} to ${{ inputs.target-environment }}
-        needs: [resolve-tag, validate-image, confirm-production]
-        if: always() && needs.validate-image.result == 'success' && (needs.confirm-production.result == 'success' || needs.confirm-production.result == 'skipped')
-        strategy:
-            matrix:
-                service: ${{ fromJson(needs.resolve-tag.outputs.services) }}
-            max-parallel: 1
-        uses: ./.github/workflows/update-gitops.yml
-        with:
-            service-name: ${{ matrix.service }}
-            environment: ${{ inputs.target-environment }}
-            image-tag: ${{ fromJson(needs.resolve-tag.outputs.tag-map)[matrix.service] }}
-            docker-image: 8060633493/craftista-${{ matrix.service }}
-            commit-sha: ${{ github.sha }}
-            branch-name: promote-${{ inputs.target-environment }}
-        secrets:
-            VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-            VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
-            GITOPS_REPO_URL: ${{ secrets.GITOPS_REPO_URL }}
-            GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+  promote:
+    name: Promote ${{ matrix.service }} to ${{ inputs.target-environment }}
+    needs: [resolve-tag, validate-image, confirm-production]
+    if: always() && needs.validate-image.result == 'success' && (needs.confirm-production.result == 'success' || needs.confirm-production.result == 'skipped')
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.resolve-tag.outputs.services) }}
+      max-parallel: 1
+    uses: ./.github/workflows/update-gitops.yml
+    with:
+      service-name: ${{ matrix.service }}
+      environment: ${{ inputs.target-environment }}
+      image-tag: ${{ fromJson(needs.resolve-tag.outputs.tag-map)[matrix.service] }}
+      docker-image: 8060633493/craftista-${{ matrix.service }}
+      commit-sha: ${{ github.sha }}
+      branch-name: promote-${{ inputs.target-environment }}
+    secrets:
+      VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      GITOPS_REPO_URL: ${{ secrets.GITOPS_REPO_URL }}
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
 
-    verify:
-        name: Verify Promotion
-        needs: [resolve-tag, promote]
-        if: always() && needs.promote.result == 'success'
-        runs-on: ubuntu-latest
-        steps:
-            - name: Promotion summary
-              run: |
-                  echo "🚀 Promotion Summary"
-                  echo "===================="
-                  echo "Services: ${{ needs.resolve-tag.outputs.services }}"
-                  echo "Target: ${{ inputs.target-environment }}"
-                  echo "Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
-                  echo "Triggered by: ${{ github.actor }}"
-                  echo ""
-                  echo "✅ GitOps repo updated. ArgoCD will sync the changes automatically."
+  verify:
+    name: Verify Promotion
+    needs: [resolve-tag, promote]
+    if: always() && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promotion summary
+        run: |
+          echo "🚀 Promotion Summary"
+          echo "===================="
+          echo "Services: ${{ needs.resolve-tag.outputs.services }}"
+          echo "Target: ${{ inputs.target-environment }}"
+          echo "Tags: ${{ needs.resolve-tag.outputs.tag-map }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo ""
+          echo "✅ GitOps repo updated. ArgoCD will sync the changes automatically."
